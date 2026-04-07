@@ -25,6 +25,7 @@ pub struct AppConfig {
     pub list: ResultsConfig,
     pub entry: EntryConfig,
     pub entry_selected: SectionConfig,
+    pub meta: MetaConfig,
     pub text: TextConfig,
 }
 
@@ -163,6 +164,22 @@ impl Default for EntryConfig {
             fg: Vec::new(),
             bg: Vec::new(),
             gradient_angle: 90,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct MetaConfig {
+    pub active: SectionConfig,
+    pub urgent: SectionConfig,
+}
+
+impl Default for MetaConfig {
+    fn default() -> Self {
+        Self {
+            active: SectionConfig::default(),
+            urgent: SectionConfig::default(),
         }
     }
 }

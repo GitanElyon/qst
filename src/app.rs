@@ -1476,6 +1476,8 @@ impl App {
         }
 
         let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy);
+        let mut items = items;
+        items.sort_by(|a, b| b.meta.urgent.cmp(&a.meta.urgent));
 
         (title, message, items)
     }
