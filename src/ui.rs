@@ -176,15 +176,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         0
     };
     let entry_selected_visible = config.entry_selected.is_visible();
-    let selected_symbol_width = if entry_selected_visible {
-        highlight_symbol_width(config)
-    } else {
-        0
-    };
-    let mut text_area_width = scroll_area.width.saturating_sub(padding);
-    text_area_width = text_area_width.saturating_sub(selected_symbol_width);
-    let full_row_width = text_area_width + selected_symbol_width;
-
     let entry_style = Style::default();
     let normal_entry_style = config.entry.base_style(config.text.style());
 
@@ -199,6 +190,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         ""
     };
+    let selected_symbol_width = highlight_symbol.chars().count() as u16;
+    let mut text_area_width = scroll_area.width.saturating_sub(padding);
+    text_area_width = text_area_width.saturating_sub(selected_symbol_width);
+    let full_row_width = text_area_width + selected_symbol_width;
 
     let items: Vec<ListItem> = if app.mode == AppMode::AppSelection {
             app.filtered_entries
@@ -215,8 +210,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     let prefix = if is_fav { fav_symbol } else { &empty_prefix };
                     let name_with_icon = format!("{}{}", prefix, entry.name);
 
-                    let mut display_text =
-                        aligned_text(&name_with_icon, text_area_width, config.text.alignment());
+                    let mut display_text = aligned_text(
+                        &name_with_icon,
+                        text_area_width,
+                        config.text.alignment(),
+                        selected_symbol_width,
+                    );
 
                     if entry_selected_visible {
                         let prefix = if Some(idx) == selected_idx {
@@ -251,7 +250,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .map(|(idx, item)| {
                     let visible_title = item.meta.display.as_deref().unwrap_or(&item.title);
                     let label = visible_title.to_string();
-                    let mut display_text = aligned_text(&label, text_area_width, config.text.alignment());
+                    let alignment = if item.meta.center {
+                        TextAlignment::Center
+                    } else {
+                        config.text.alignment()
+                    };
+                    let mut display_text = aligned_text(
+                        &label,
+                        text_area_width,
+                        alignment,
+                        selected_symbol_width,
+                    );
                     if entry_selected_visible {
                         let prefix = if Some(idx) == selected_idx {
                             highlight_symbol.to_string()
@@ -293,7 +302,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .iter()
                 .enumerate()
                 .map(|(idx, file)| {
-                    let mut display_text = aligned_text(file, text_area_width, config.text.alignment());
+                    let mut display_text = aligned_text(
+                        file,
+                        text_area_width,
+                        config.text.alignment(),
+                        selected_symbol_width,
+                    );
                     if entry_selected_visible {
                         let prefix = if Some(idx) == selected_idx {
                             highlight_symbol.to_string()
@@ -552,7 +566,18 @@ fn pad_to_width(text: &str, width: usize) -> String {
     }
 }
 
-fn aligned_text(text: &str, width: u16, alignment: TextAlignment) -> String {
+fn aligned_text(
+    text: &str,
+    width: u16,
+    alignment: TextAlignment,
+    selected_symbol_width: u16,
+) -> String {
+    let width = if matches!(alignment, TextAlignment::Center) {
+        width.saturating_sub(selected_symbol_width)
+    } else {
+        width
+    };
+
     if width == 0 {
         return text.to_string();
     }
@@ -577,15 +602,6 @@ fn aligned_text(text: &str, width: u16, alignment: TextAlignment) -> String {
             )
         }
     }
-}
-
-fn highlight_symbol_width(config: &crate::config::AppConfig) -> u16 {
-    config
-        .general
-        .highlight_symbol
-        .as_deref()
-        .map(|s| s.chars().count() as u16)
-        .unwrap_or(0)
 }
 
 fn interpolate_color(c1: Color, c2: Color, factor: f32) -> Color {
@@ -619,5 +635,22 @@ fn color_to_rgb(c: Color) -> (u8, u8, u8) {
         Color::LightMagenta => (255, 85, 255),
         Color::LightCyan => (85, 255, 255),
         _ => (255, 255, 255),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn center_alignment_accounts_for_selection_gutter() {
+        assert_eq!(
+            aligned_text("abcd", 10, TextAlignment::Center, 0),
+            "   abcd   "
+        );
+        assert_eq!(
+            aligned_text("abcd", 10, TextAlignment::Center, 2),
+            "  abcd  "
+        );
     }
 }

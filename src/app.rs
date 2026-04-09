@@ -51,6 +51,7 @@ pub struct ScriptRowMeta {
     pub nonselectable: bool,
     pub permanent: bool,
     pub active: bool,
+    pub center: bool,
     pub urgent: bool,
     pub fuzzy: bool,
 }
@@ -308,6 +309,7 @@ impl App {
                 "nonselectable" => meta.nonselectable = Self::parse_meta_bool(value),
                 "permanent" => meta.permanent = Self::parse_meta_bool(value),
                 "active" => meta.active = Self::parse_meta_bool(value),
+                "center" => meta.center = Self::parse_meta_bool(value),
                 "urgent" => meta.urgent = Self::parse_meta_bool(value),
                 "fuzzy" => meta.fuzzy = Self::parse_meta_bool(value),
                 _ => {}
@@ -327,6 +329,7 @@ impl App {
         target.nonselectable |= source.nonselectable;
         target.permanent |= source.permanent;
         target.active |= source.active;
+        target.center |= source.center;
         target.urgent |= source.urgent;
         target.fuzzy |= source.fuzzy;
     }
@@ -1812,11 +1815,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_script_row_text_strips_fuzzy_meta() {
-        let (visible, meta) = App::parse_script_row_text("Clipboard entry @meta:fuzzy=true");
+    fn parse_script_row_text_strips_fuzzy_and_center_meta() {
+        let (visible, meta) = App::parse_script_row_text(
+            "Clipboard entry @meta:fuzzy=true @meta:center=true",
+        );
 
         assert_eq!(visible, "Clipboard entry");
         assert!(meta.fuzzy);
+        assert!(meta.center);
+    }
+
+    #[test]
+    fn apply_script_row_meta_merges_center_flag() {
+        let mut target = ScriptRowMeta::default();
+
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                center: true,
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert!(target.center);
     }
 
     #[test]
