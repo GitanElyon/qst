@@ -27,7 +27,6 @@ pub struct AppEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptAction {
-    CopyToClipboardAndExit,
     CopyToClipboard,
     SetStatusMessage,
     ClearStatusMessage,
@@ -39,9 +38,9 @@ pub enum ScriptAction {
     PopLastChar,
     ClearQuery,
     RefreshResults,
-    ExecuteAndExit,
-    ExecuteAndRefresh,
-    ExecuteAndResetPrompt,
+    Execute,
+    ExitApp,
+    ResetPrompt,
     None,
 }
 
@@ -76,7 +75,7 @@ enum ScriptStorageReadAction {
 pub struct ScriptItem {
     pub title: String,
     pub value: String,
-    pub action: ScriptAction,
+    pub actions: Vec<ScriptAction>,
     pub meta: ScriptRowMeta,
 }
 
@@ -222,6 +221,15 @@ impl App {
     pub fn set_search_query(&mut self, query: String) {
         self.search_query = query;
         self.search_cursor = Self::char_count(&self.search_query);
+    }
+
+    fn reset_search_prompt(&mut self) {
+        if let Some(space_idx) = self.search_query.find(' ') {
+            let new_query = format!("{} ", self.search_query[..space_idx].trim());
+            self.set_search_query(new_query);
+        }
+
+        self.update_filter();
     }
 
     fn script_item_is_selectable(&self, index: usize) -> bool {
@@ -430,6 +438,42 @@ impl App {
         let mut parts = vec![item.title.as_str(), item.value.as_str()];
         parts.extend(item.meta.meta.iter().map(String::as_str));
         parts.join(" ")
+    }
+
+    fn parse_script_actions(value: &str) -> Vec<ScriptAction> {
+        let mut actions = Vec::new();
+
+        for token in value.split(',') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+
+            match token {
+                "CopyToClipboard" => actions.push(ScriptAction::CopyToClipboard),
+                "SetStatusMessage" => actions.push(ScriptAction::SetStatusMessage),
+                "ClearStatusMessage" => actions.push(ScriptAction::ClearStatusMessage),
+                "SetSearchQuery" => actions.push(ScriptAction::SetSearchQuery),
+                "AppendToQuery" => actions.push(ScriptAction::AppendToQuery),
+                "PrependToQuery" => actions.push(ScriptAction::PrependToQuery),
+                "ReplaceLastToken" => actions.push(ScriptAction::ReplaceLastToken),
+                "PopLastToken" => actions.push(ScriptAction::PopLastToken),
+                "PopLastChar" => actions.push(ScriptAction::PopLastChar),
+                "ClearQuery" => actions.push(ScriptAction::ClearQuery),
+                "RefreshResults" => actions.push(ScriptAction::RefreshResults),
+                "Execute" => actions.push(ScriptAction::Execute),
+                "ExitApp" => actions.push(ScriptAction::ExitApp),
+                "ResetPrompt" => actions.push(ScriptAction::ResetPrompt),
+                "None" => actions.push(ScriptAction::None),
+                _ => {}
+            }
+        }
+
+        if actions.is_empty() {
+            actions.push(ScriptAction::None);
+        }
+
+        actions
     }
 
     fn fuzzy_filter_script_items(
@@ -756,7 +800,7 @@ impl App {
                     if item.meta.nonselectable {
                         return;
                     }
-                    self.apply_script_action(&item);
+                    self.apply_script_actions(&item);
                 }
             }
             return;
@@ -1274,7 +1318,7 @@ impl App {
                 self.script_items = vec![ScriptItem {
                     title: format!("Script error: {}", err),
                     value: String::new(),
-                    action: ScriptAction::None,
+                    actions: vec![ScriptAction::None],
                     meta: ScriptRowMeta::default(),
                 }];
             }
@@ -1319,8 +1363,8 @@ impl App {
         let mut title: Option<String> = None;
         let mut message: Option<String> = None;
         let mut items = Vec::new();
-        let mut default_action = ScriptAction::None;
-        let mut next_item_action: Option<ScriptAction> = None;
+        let mut default_actions = vec![ScriptAction::None];
+        let mut next_item_actions: Option<Vec<ScriptAction>> = None;
         let mut script_fuzzy = false;
 
         for raw in output.lines() {
@@ -1351,15 +1395,15 @@ impl App {
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("action ") {
-                    default_action = Self::parse_script_action(value.trim());
+                    default_actions = Self::parse_script_actions(value.trim());
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("default_item_action ") {
-                    default_action = Self::parse_script_action(value.trim());
+                    default_actions = Self::parse_script_actions(value.trim());
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("item_action ") {
-                    next_item_action = Some(Self::parse_script_action(value.trim()));
+                    next_item_actions = Some(Self::parse_script_actions(value.trim()));
                     continue;
                 }
                 if directive == "clear" {
@@ -1391,8 +1435,8 @@ impl App {
                     Self::append_storage_rows(
                         &mut items,
                         read_items,
-                        &mut next_item_action,
-                        &default_action,
+                        &mut next_item_actions,
+                        &default_actions,
                     );
                     continue;
                 }
@@ -1409,11 +1453,14 @@ impl App {
                     } else {
                         format!("{} = {}", query, result_text)
                     };
+                    let actions = next_item_actions
+                        .take()
+                        .unwrap_or_else(|| default_actions.clone());
                     items.clear();
                     items.push(ScriptItem {
                         title: label,
                         value: result_text,
-                        action: next_item_action.take().unwrap_or(default_action.clone()),
+                        actions,
                         meta: result_meta,
                     });
                     continue;
@@ -1431,24 +1478,26 @@ impl App {
                             if action_text.is_empty() {
                                 None
                             } else {
-                                Some((Self::parse_script_action(action_text), meta))
+                                Some((Self::parse_script_actions(action_text), meta))
                             }
                         })
-                        .unwrap_or((ScriptAction::None, ScriptRowMeta::default()));
+                        .unwrap_or((Vec::new(), ScriptRowMeta::default()));
                     if !item_title.is_empty() {
                         let mut meta = ScriptRowMeta::default();
                         Self::apply_script_row_meta(&mut meta, title_meta);
                         Self::apply_script_row_meta(&mut meta, value_meta);
                         Self::apply_script_row_meta(&mut meta, action_meta);
-                        let action = if explicit_action != ScriptAction::None {
-                            explicit_action
+                        let actions = if explicit_action.is_empty() {
+                            next_item_actions
+                                .take()
+                                .unwrap_or_else(|| default_actions.clone())
                         } else {
-                            next_item_action.take().unwrap_or(default_action.clone())
+                            explicit_action
                         };
                         items.push(ScriptItem {
                             title: item_title,
                             value: item_value,
-                            action,
+                            actions,
                             meta,
                         });
                     }
@@ -1467,10 +1516,13 @@ impl App {
             let mut meta = ScriptRowMeta::default();
             Self::apply_script_row_meta(&mut meta, title_meta);
             Self::apply_script_row_meta(&mut meta, value_meta);
+            let actions = next_item_actions
+                .take()
+                .unwrap_or_else(|| default_actions.clone());
             items.push(ScriptItem {
                 title: item_title,
                 value: item_value,
-                action: next_item_action.take().unwrap_or(default_action.clone()),
+                actions,
                 meta,
             });
         }
@@ -1485,19 +1537,21 @@ impl App {
     fn append_storage_rows(
         items: &mut Vec<ScriptItem>,
         lines: Vec<String>,
-        next_item_action: &mut Option<ScriptAction>,
-        default_action: &ScriptAction,
+        next_item_actions: &mut Option<Vec<ScriptAction>>,
+        default_actions: &[ScriptAction],
     ) {
         for line in lines {
             if line.trim().is_empty() {
                 continue;
             }
 
-            let action = next_item_action.take().unwrap_or_else(|| default_action.clone());
+            let actions = next_item_actions
+                .take()
+                .unwrap_or_else(|| default_actions.to_vec());
             items.push(ScriptItem {
                 title: line.clone(),
                 value: line,
-                action,
+                actions,
                 meta: ScriptRowMeta::default(),
             });
         }
@@ -1523,109 +1577,7 @@ impl App {
         }
     }
 
-    fn parse_script_action(value: &str) -> ScriptAction {
-        match value {
-            "CopyToClipboardAndExit" => ScriptAction::CopyToClipboardAndExit,
-            "CopyToClipboard" => ScriptAction::CopyToClipboard,
-            "SetStatusMessage" => ScriptAction::SetStatusMessage,
-            "ClearStatusMessage" => ScriptAction::ClearStatusMessage,
-            "SetSearchQuery" => ScriptAction::SetSearchQuery,
-            "AppendToQuery" => ScriptAction::AppendToQuery,
-            "PrependToQuery" => ScriptAction::PrependToQuery,
-            "ReplaceLastToken" => ScriptAction::ReplaceLastToken,
-            "PopLastToken" => ScriptAction::PopLastToken,
-            "PopLastChar" => ScriptAction::PopLastChar,
-            "ClearQuery" => ScriptAction::ClearQuery,
-            "RefreshResults" => ScriptAction::RefreshResults,
-            "ExecuteAndExit" => ScriptAction::ExecuteAndExit,
-            "ExecuteAndRefresh" => ScriptAction::ExecuteAndRefresh,
-            "ExecuteAndResetPrompt" => ScriptAction::ExecuteAndResetPrompt,
-            _ => ScriptAction::None,
-        }
-    }
-
-    fn apply_script_action(&mut self, item: &ScriptItem) {
-        match item.action {
-            ScriptAction::None => {}
-            ScriptAction::SetSearchQuery => {
-                self.set_search_query(item.value.clone());
-                self.update_filter();
-            }
-            ScriptAction::AppendToQuery => self.insert_search_text(&item.value),
-            ScriptAction::PrependToQuery => {
-                self.set_search_query(format!("{}{}", item.value, self.search_query));
-                self.update_filter();
-            }
-            ScriptAction::ReplaceLastToken => {
-                self.replace_last_query_token(&item.value);
-                self.update_filter();
-            }
-            ScriptAction::PopLastToken => {
-                self.pop_last_query_token();
-                self.update_filter();
-            }
-            ScriptAction::PopLastChar => {
-                self.pop_last_query_char();
-                self.update_filter();
-            }
-            ScriptAction::ClearQuery => {
-                self.set_search_query(String::new());
-                self.update_filter();
-            }
-            ScriptAction::RefreshResults => {
-                self.update_filter();
-            }
-            ScriptAction::CopyToClipboard => {
-                if let Err(err) = self.copy_to_clipboard(&item.value) {
-                    self.status_message = Some(format!("Clipboard failed: {}", err));
-                } else {
-                    self.status_message = Some("Copied to clipboard".to_string());
-                }
-            }
-            ScriptAction::SetStatusMessage => {
-                self.status_message = Some(item.value.clone());
-            }
-            ScriptAction::ClearStatusMessage => {
-                self.status_message = None;
-            }
-            ScriptAction::CopyToClipboardAndExit => {
-                if let Err(err) = self.copy_to_clipboard(&item.value) {
-                    self.status_message = Some(format!("Clipboard failed: {}", err));
-                } else {
-                    self.should_quit = true;
-                }
-            }
-            ScriptAction::ExecuteAndExit => {
-                self.execute_shell_command(&item.value, true);
-            }
-            ScriptAction::ExecuteAndRefresh => {
-                self.execute_shell_command(&item.value, false);
-                self.update_filter();
-            }
-            ScriptAction::ExecuteAndResetPrompt => {
-                let mut command = Command::new("sh");
-                command
-                    .arg("-lc")
-                    .arg(&item.value)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null());
-                    
-                if let Ok(mut child) = command.spawn() {
-                    let _ = child.wait();
-                }
-
-                if let Some(space_idx) = self.search_query.find(' ') {
-                    let new_query = format!("{} ", self.search_query[..space_idx].trim());
-                    self.set_search_query(new_query);
-                }
-                
-                self.update_filter();
-            }
-        }
-    }
-
-    fn execute_shell_command(&mut self, command_text: &str, exit_after: bool) {
+    fn spawn_shell_command(command_text: &str) -> Result<std::process::Child, String> {
         let mut command = Command::new("sh");
         command
             .arg("-lc")
@@ -1642,15 +1594,99 @@ impl App {
             });
         }
 
-        match command.spawn() {
-            Ok(_) => {
-                self.status_message = None;
-                if exit_after {
-                    self.should_quit = true;
+        command.spawn().map_err(|err| err.to_string())
+    }
+
+    fn apply_script_actions(&mut self, item: &ScriptItem) {
+        let mut pending_execute: Option<std::process::Child> = None;
+
+        for action in &item.actions {
+            let should_continue = match action {
+                ScriptAction::None => true,
+                ScriptAction::SetSearchQuery => {
+                    self.set_search_query(item.value.clone());
+                    self.update_filter();
+                    true
                 }
-            }
-            Err(err) => {
-                self.status_message = Some(format!("Failed to execute command: {}", err));
+                ScriptAction::AppendToQuery => {
+                    self.insert_search_text(&item.value);
+                    true
+                }
+                ScriptAction::PrependToQuery => {
+                    self.set_search_query(format!("{}{}", item.value, self.search_query));
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::ReplaceLastToken => {
+                    self.replace_last_query_token(&item.value);
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::PopLastToken => {
+                    self.pop_last_query_token();
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::PopLastChar => {
+                    self.pop_last_query_char();
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::ClearQuery => {
+                    self.set_search_query(String::new());
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::RefreshResults => {
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::CopyToClipboard => match self.copy_to_clipboard(&item.value) {
+                    Ok(()) => {
+                        self.status_message = Some("Copied to clipboard".to_string());
+                        true
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Clipboard failed: {}", err));
+                        false
+                    }
+                },
+                ScriptAction::SetStatusMessage => {
+                    self.status_message = Some(item.value.clone());
+                    true
+                }
+                ScriptAction::ClearStatusMessage => {
+                    self.status_message = None;
+                    true
+                }
+                ScriptAction::Execute => match Self::spawn_shell_command(&item.value) {
+                    Ok(child) => {
+                        pending_execute = Some(child);
+                        self.status_message = None;
+                        true
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Failed to execute command: {}", err));
+                        false
+                    }
+                },
+                ScriptAction::ExitApp => {
+                    self.should_quit = true;
+                    self.status_message = None;
+                    true
+                }
+                ScriptAction::ResetPrompt => {
+                    if let Some(mut child) = pending_execute.take() {
+                        let _ = child.wait();
+                    }
+
+                    self.reset_search_prompt();
+                    true
+                }
+            };
+
+            if !should_continue {
+                break;
             }
         }
     }
@@ -1788,7 +1824,7 @@ mod tests {
         let fuzzy_item = ScriptItem {
             title: "Clipboard history".to_string(),
             value: "Clipboard history".to_string(),
-            action: ScriptAction::None,
+            actions: vec![ScriptAction::None],
             meta: ScriptRowMeta {
                 fuzzy: true,
                 ..ScriptRowMeta::default()
@@ -1797,7 +1833,7 @@ mod tests {
         let plain_item = ScriptItem {
             title: "Terminal".to_string(),
             value: "Terminal".to_string(),
-            action: ScriptAction::None,
+            actions: vec![ScriptAction::None],
             meta: ScriptRowMeta::default(),
         };
 
@@ -1806,6 +1842,24 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].title, fuzzy_item.title);
         assert_eq!(filtered[1].title, plain_item.title);
+    }
+
+    #[test]
+    fn parse_script_actions_supports_comma_separated_composition() {
+        assert_eq!(
+            App::parse_script_actions("CopyToClipboard,ExitApp"),
+            vec![ScriptAction::CopyToClipboard, ScriptAction::ExitApp]
+        );
+
+        assert_eq!(
+            App::parse_script_actions("Execute,RefreshResults"),
+            vec![ScriptAction::Execute, ScriptAction::RefreshResults]
+        );
+
+        assert_eq!(
+            App::parse_script_actions("Execute,ResetPrompt"),
+            vec![ScriptAction::Execute, ScriptAction::ResetPrompt]
+        );
     }
 }
 
