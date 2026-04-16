@@ -56,6 +56,22 @@ pub struct ScriptRowMeta {
     pub fuzzy: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptMetadata {
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub author: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptMetaField {
+    Name,
+    Version,
+    Author,
+    Description,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScriptStorageWriteAction {
     PFront,
@@ -103,6 +119,7 @@ pub struct App {
     pub filtered_files: Vec<String>,
     pub history: History,
     pub script_title: Option<String>,
+    pub script_meta: Option<ScriptMetadata>,
     pub script_items: Vec<ScriptItem>,
     pub qst_ascii: String,
     scripts: Vec<ScriptPlugin>,
@@ -154,6 +171,7 @@ impl App {
             filtered_files: Vec::new(),
             history,
             script_title: None,
+            script_meta: None,
             script_items: Vec::new(),
             qst_ascii,
             scripts,
@@ -257,6 +275,44 @@ impl App {
 
     fn parse_meta_bool(value: &str) -> bool {
         !matches!(value.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off")
+    }
+
+    fn parse_script_metadata_field(value: &str) -> Option<ScriptMetaField> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "name" => Some(ScriptMetaField::Name),
+            "version" => Some(ScriptMetaField::Version),
+            "author" => Some(ScriptMetaField::Author),
+            "description" => Some(ScriptMetaField::Description),
+            _ => None,
+        }
+    }
+
+    fn parse_script_metadata(value: &str) -> Option<ScriptMetadata> {
+        let mut parts = value.splitn(4, ',');
+        let name = parts.next().unwrap_or_default().trim();
+        let version = parts.next().unwrap_or_default().trim();
+        let author = parts.next().unwrap_or_default().trim();
+        let description = parts.next().unwrap_or_default().trim();
+
+        if [name, version, author, description].iter().all(|part| part.is_empty()) {
+            return None;
+        }
+
+        Some(ScriptMetadata {
+            name: (!name.is_empty()).then(|| name.to_string()),
+            version: (!version.is_empty()).then(|| version.to_string()),
+            author: (!author.is_empty()).then(|| author.to_string()),
+            description: (!description.is_empty()).then(|| description.to_string()),
+        })
+    }
+
+    fn script_metadata_field<'a>(metadata: &'a ScriptMetadata, field: ScriptMetaField) -> Option<&'a str> {
+        match field {
+            ScriptMetaField::Name => metadata.name.as_deref(),
+            ScriptMetaField::Version => metadata.version.as_deref(),
+            ScriptMetaField::Author => metadata.author.as_deref(),
+            ScriptMetaField::Description => metadata.description.as_deref(),
+        }
     }
 
     fn parse_script_row_meta(text: &str) -> (String, ScriptRowMeta) {
@@ -591,6 +647,7 @@ impl App {
         self.mode = AppMode::AppSelection;
         self.filtered_files.clear();
         self.script_title = None;
+        self.script_meta = None;
         self.script_items.clear();
 
         let query_slice_str = self.search_query.trim().to_string();
@@ -1311,12 +1368,16 @@ impl App {
         self.mode = AppMode::ScriptResults;
 
         match self.run_script(&script, &payload) {
-            Ok((title, message, items)) => {
-                self.script_title = title.or_else(|| Some(format!(" {} ", script.id)));
+            Ok((title, message, meta, items)) => {
+                self.script_meta = meta.clone();
+                self.script_title = title
+                    .or_else(|| meta.and_then(|meta| meta.name).map(|name| format!(" {} ", name)))
+                    .or_else(|| Some(format!(" {} ", script.id)));
                 self.script_items = items;
                 self.status_message = message;
             }
             Err(err) => {
+                self.script_meta = None;
                 self.script_title = Some(format!(" {} ", script.id));
                 self.script_items = vec![ScriptItem {
                     title: format!("Script error: {}", err),
@@ -1330,7 +1391,7 @@ impl App {
         true
     }
 
-    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Vec<ScriptItem>), String> {
+    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
         let mut command = if let Some(interpreter) = script.interpreter {
             let mut command = Command::new(interpreter);
             command.arg(&script.path);
@@ -1362,9 +1423,10 @@ impl App {
         output: &str,
         query: &str,
         script_id: &str,
-    ) -> (Option<String>, Option<String>, Vec<ScriptItem>) {
+    ) -> (Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>) {
         let mut title: Option<String> = None;
         let mut message: Option<String> = None;
+        let mut meta: Option<ScriptMetadata> = None;
         let mut items = Vec::new();
         let mut default_actions = vec![ScriptAction::None];
         let mut next_item_actions: Option<Vec<ScriptAction>> = None;
@@ -1377,6 +1439,30 @@ impl App {
             }
 
             if let Some(directive) = line.strip_prefix("qst! ") {
+                if let Some(value) = directive.strip_prefix("meta ") {
+                    let value = value.trim();
+                    if let Some(parsed_meta) = Self::parse_script_metadata(value) {
+                        if title.is_none() {
+                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
+                                title = Some(format!(" {} ", name));
+                            }
+                        }
+                        meta = Some(parsed_meta);
+                        continue;
+                    }
+
+                    if let Some(field) = Self::parse_script_metadata_field(value) {
+                        if let Some(current_meta) = meta.as_ref() {
+                            if let Some(field_value) = Self::script_metadata_field(current_meta, field)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                message = Some(field_value.to_string());
+                            }
+                        }
+                        continue;
+                    }
+                }
                 if let Some(value) = directive.strip_prefix("title ") {
                     let (visible, meta) = Self::parse_script_row_text(value.trim());
                     if meta.fuzzy {
@@ -1534,7 +1620,7 @@ impl App {
         let mut items = items;
         items.sort_by(|a, b| b.meta.urgent.cmp(&a.meta.urgent));
 
-        (title, message, items)
+        (title, message, meta, items)
     }
 
     fn append_storage_rows(
@@ -1881,6 +1967,40 @@ mod tests {
             App::parse_script_actions("Execute,ResetPrompt"),
             vec![ScriptAction::Execute, ScriptAction::ResetPrompt]
         );
+    }
+
+    #[test]
+    fn parse_script_output_parses_script_metadata_header() {
+        let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! title My Awesome script\n";
+
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+
+        assert_eq!(title.as_deref(), Some(" My Awesome script "));
+        assert!(message.is_none());
+        assert!(items.is_empty());
+
+        let meta = meta.expect("metadata should be captured");
+        assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
+        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert_eq!(meta.author.as_deref(), Some("John Doe"));
+        assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
+    }
+
+    #[test]
+    fn parse_script_output_supports_script_metadata_field_selection() {
+        let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! meta author\n";
+
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+
+        assert_eq!(title.as_deref(), Some(" My Awesome script "));
+        assert_eq!(message.as_deref(), Some("John Doe"));
+        assert!(items.is_empty());
+
+        let meta = meta.expect("metadata should be captured");
+        assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
+        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert_eq!(meta.author.as_deref(), Some("John Doe"));
+        assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
     }
 }
 
