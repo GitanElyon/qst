@@ -837,7 +837,10 @@ impl App {
                     let mut new_path = selected_file.clone();
 
                     let expanded_path = self.expand_path(&new_path);
-                    if Path::new(&expanded_path).is_dir() && !new_path.ends_with('/') {
+                    if Path::new(&expanded_path).is_dir()
+                        && !new_path.ends_with('/')
+                        && !new_path.ends_with("/.")
+                    {
                         new_path.push('/');
                     }
 
@@ -868,12 +871,8 @@ impl App {
 
         if let Some(i) = self.list_state.selected() {
             if self.mode == AppMode::FileSelection && self.filtered_entries.is_empty() {
-                if self.should_use_selected_file_completion() {
-                    if let Some(selected_file) = self.filtered_files.get(i).cloned() {
-                        self.open_file(&selected_file);
-                    }
-                } else if let Some(query_path) = self.current_file_query_path() {
-                    self.open_file(&query_path);
+                if let Some(selected_file) = self.filtered_files.get(i).cloned() {
+                    self.open_file(&selected_file);
                 }
                 return;
             }
@@ -892,13 +891,11 @@ impl App {
                     if self.config.features.enable_launch_args {
                         if let Some(launch_args) = &self.launch_args {
                             let mut current_launch_args = launch_args.clone();
-                            
+
                             if self.mode == AppMode::FileSelection {
-                                if self.should_use_selected_file_completion() {
-                                    if let Some(selected_file) = self.filtered_files.get(i) {
-                                        if let Some(last) = current_launch_args.last_mut() {
-                                            *last = selected_file.clone();
-                                        }
+                                if let Some(selected_file) = self.filtered_files.get(i) {
+                                    if let Some(last) = current_launch_args.last_mut() {
+                                        *last = selected_file.clone();
                                     }
                                 }
                             }
@@ -1019,33 +1016,6 @@ impl App {
             || query.starts_with("../")
     }
 
-    fn current_file_query_path(&self) -> Option<String> {
-        let query = self.search_query.trim();
-        if query.is_empty() {
-            return None;
-        }
-
-        let path = query
-            .rsplit_once(' ')
-            .map(|(_, tail)| tail)
-            .unwrap_or(query);
-
-        if Self::looks_like_path_query(path) {
-            Some(path.to_string())
-        } else {
-            None
-        }
-    }
-
-    fn should_use_selected_file_completion(&self) -> bool {
-        let Some(path) = self.current_file_query_path() else {
-            return true;
-        };
-
-        let segment_after_last_slash = path.rsplit('/').next().unwrap_or(path.as_str());
-        !segment_after_last_slash.is_empty()
-    }
-
     fn expand_path(&self, path: &str) -> String {
         if path == "~" {
             return std::env::var("HOME").unwrap_or_else(|_| path.to_string());
@@ -1070,6 +1040,7 @@ impl App {
             .map(|(head, _)| format!("{}/", head))
             .unwrap_or_default();
         let is_directory_query = expanded_input.ends_with('/') || input_path.is_dir();
+        let show_current_dir_entry = query_path.ends_with('/');
 
         let (dir_path, prefix, display_root) = if is_directory_query {
             let root = if query_path.ends_with('/') {
@@ -1119,6 +1090,10 @@ impl App {
             });
         } else {
             results.sort();
+        }
+
+        if show_current_dir_entry {
+            results.insert(0, format!("{}.", display_root));
         }
 
         results
@@ -1899,6 +1874,45 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+
+    struct TempDirCleanup(PathBuf);
+
+    impl Drop for TempDirCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_app() -> App {
+        App {
+            search_query: String::new(),
+            search_cursor: 0,
+            entries: Vec::new(),
+            filtered_entries: Vec::new(),
+            list_state: ListState::default(),
+            should_quit: false,
+            config: AppConfig::default(),
+            status_message: None,
+            launch_args: None,
+            mode: AppMode::AppSelection,
+            filtered_files: Vec::new(),
+            history: History::default(),
+            script_title: None,
+            script_meta: None,
+            script_items: Vec::new(),
+            qst_ascii: String::new(),
+            scripts: Vec::new(),
+        }
+    }
+
+    fn unique_temp_path() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("qst-file-completions-{}-{}", std::process::id(), suffix))
+    }
 
     #[test]
     fn parse_script_row_text_strips_fuzzy_and_center_meta() {
@@ -2001,6 +2015,31 @@ mod tests {
         assert_eq!(meta.version.as_deref(), Some("1.0.0"));
         assert_eq!(meta.author.as_deref(), Some("John Doe"));
         assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
+    }
+
+    #[test]
+    fn list_completions_prepends_current_directory_entry_at_trailing_slash() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        let projects = root.join("Projects");
+        let nested_dir = projects.join("docs");
+        let nested_file = projects.join("alpha.txt");
+
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(&nested_file, "alpha").unwrap();
+
+        let app = test_app();
+        let query = format!("{}/", projects.display());
+        let dot_entry = format!("{}.", query);
+        let completions = app.list_completions(&query);
+
+        assert_eq!(completions.first().map(String::as_str), Some(dot_entry.as_str()));
+        assert!(completions.iter().any(|entry| entry == &format!("{}docs/", query)));
+        assert!(completions.iter().any(|entry| entry == &format!("{}alpha.txt", query)));
+
+        let filtered = app.list_completions(&format!("{}a", query));
+        assert_eq!(filtered, vec![format!("{}alpha.txt", query)]);
     }
 }
 
