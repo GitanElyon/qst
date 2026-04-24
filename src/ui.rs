@@ -4,7 +4,7 @@ use crate::{
 };
 use ratatui::{
     prelude::*,
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Clear, List, ListItem, Paragraph},
 };
 use std::f32::consts::PI;
@@ -176,15 +176,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         0
     };
     let entry_selected_visible = config.entry_selected.is_visible();
-    let selected_symbol_width = if entry_selected_visible {
-        highlight_symbol_width(config)
-    } else {
-        0
-    };
-    let mut text_area_width = scroll_area.width.saturating_sub(padding);
-    text_area_width = text_area_width.saturating_sub(selected_symbol_width);
-    let full_row_width = text_area_width + selected_symbol_width;
-
     let entry_style = Style::default();
     let normal_entry_style = config.entry.base_style(config.text.style());
 
@@ -199,6 +190,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         ""
     };
+    let selected_symbol_width = highlight_symbol.chars().count() as u16;
+    let mut text_area_width = scroll_area.width.saturating_sub(padding);
+    text_area_width = text_area_width.saturating_sub(selected_symbol_width);
+    let full_row_width = text_area_width + selected_symbol_width;
 
     let items: Vec<ListItem> = if app.mode == AppMode::AppSelection {
             app.filtered_entries
@@ -215,8 +210,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     let prefix = if is_fav { fav_symbol } else { &empty_prefix };
                     let name_with_icon = format!("{}{}", prefix, entry.name);
 
-                    let mut display_text =
-                        aligned_text(&name_with_icon, text_area_width, config.text.alignment());
+                    let mut display_text = aligned_text(
+                        &name_with_icon,
+                        text_area_width,
+                        config.text.alignment(),
+                        selected_symbol_width,
+                    );
 
                     if entry_selected_visible {
                         let prefix = if Some(idx) == selected_idx {
@@ -240,6 +239,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         full_row_width,
                         normal_entry_style,
                         entry_style,
+                        false,
                     )
                 })
                 .collect()
@@ -249,15 +249,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .enumerate()
                 .map(|(idx, item)| {
                     let visible_title = item.meta.display.as_deref().unwrap_or(&item.title);
-                    let label = if item.meta.urgent {
-                        format!("! {}", visible_title)
-                    } else if item.meta.active {
-                        format!("* {}", visible_title)
+                    let label = visible_title.to_string();
+                    let alignment = if item.meta.center {
+                        TextAlignment::Center
                     } else {
-                        visible_title.to_string()
+                        config.text.alignment()
                     };
-
-                    let mut display_text = aligned_text(&label, text_area_width, config.text.alignment());
+                    let mut display_text = aligned_text(
+                        &label,
+                        text_area_width,
+                        alignment,
+                        selected_symbol_width,
+                    );
                     if entry_selected_visible {
                         let prefix = if Some(idx) == selected_idx {
                             highlight_symbol.to_string()
@@ -265,6 +268,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                             " ".repeat(highlight_symbol.chars().count())
                         };
                         display_text = format!("{}{}", prefix, display_text);
+                    }
+
+                    let mut row_style = normal_entry_style;
+                    if item.meta.active {
+                        row_style = row_style.patch(config.meta.active.style());
+                    }
+                    if item.meta.urgent {
+                        row_style = row_style
+                            .patch(config.meta.urgent.style())
+                            .add_modifier(Modifier::BOLD);
                     }
 
                     build_list_item(
@@ -278,8 +291,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         config.entry.gradient_angle,
                         config.entry_selected.gradient_angle,
                         full_row_width,
-                        normal_entry_style,
+                        row_style,
                         entry_style,
+                        item.meta.active,
                     )
                 })
                 .collect()
@@ -288,7 +302,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .iter()
                 .enumerate()
                 .map(|(idx, file)| {
-                    let mut display_text = aligned_text(file, text_area_width, config.text.alignment());
+                    let mut display_text = aligned_text(
+                        file,
+                        text_area_width,
+                        config.text.alignment(),
+                        selected_symbol_width,
+                    );
                     if entry_selected_visible {
                         let prefix = if Some(idx) == selected_idx {
                             highlight_symbol.to_string()
@@ -311,6 +330,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         full_row_width,
                         normal_entry_style,
                         entry_style,
+                        false,
                     )
                 })
                 .collect()
@@ -345,17 +365,24 @@ fn build_list_item(
     entry_angle: u16,
     selected_angle: u16,
     full_row_width: u16,
-    normal_entry_style: Style,
+    row_style: Style,
     entry_style: Style,
+    fill_row: bool,
 ) -> ListItem<'static> {
     if !is_selected || !config.entry_selected.is_visible() {
+        let rendered_text = if fill_row {
+            pad_to_width(display_text, full_row_width as usize)
+        } else {
+            display_text.to_string()
+        };
+
         if entry_fg_colors.len() > 1 || entry_bg_colors.len() > 1 {
-            let width = display_text.chars().count().max(1) as u16;
-            let spans: Vec<Span<'static>> = display_text
+            let width = rendered_text.chars().count().max(1) as u16;
+            let spans: Vec<Span<'static>> = rendered_text
                 .chars()
                 .enumerate()
                 .map(|(idx, ch)| {
-                    let mut style = normal_entry_style;
+                    let mut style = row_style;
                     if !entry_fg_colors.is_empty() {
                         let fg = if entry_fg_colors.len() == 1 {
                             entry_fg_colors[0]
@@ -376,20 +403,19 @@ fn build_list_item(
                 })
                 .collect();
 
-            return ListItem::new(Line::from(spans)).style(entry_style);
+            return ListItem::new(Text::from(Line::from(spans))).style(entry_style);
         }
 
-        return ListItem::new(Line::from(Span::styled(display_text.to_string(), normal_entry_style)))
-            .style(entry_style);
+        return ListItem::new(Text::from(Span::styled(rendered_text, row_style))).style(entry_style);
     }
 
-    let selected_text = if config.entry_selected.full_width_highlight.unwrap_or(true) {
+    let selected_text = if config.entry_selected.full_width_highlight.unwrap_or(true) || fill_row {
         pad_to_width(display_text, full_row_width as usize)
     } else {
         display_text.to_string()
     };
 
-    let selected_style = config.entry_selected.style();
+    let selected_style = row_style.patch(config.entry_selected.style());
     let width = selected_text.chars().count().max(1) as u16;
     if selected_fg_colors.len() > 1 || selected_bg_colors.len() > 1 {
         let spans: Vec<Span<'static>> = selected_text
@@ -417,9 +443,9 @@ fn build_list_item(
             })
             .collect();
 
-        ListItem::new(Line::from(spans)).style(entry_style)
+        ListItem::new(Text::from(Line::from(spans))).style(entry_style)
     } else {
-        ListItem::new(Line::from(Span::styled(selected_text, selected_style))).style(entry_style)
+        ListItem::new(Text::from(Span::styled(selected_text, selected_style))).style(entry_style)
     }
 }
 
@@ -540,7 +566,18 @@ fn pad_to_width(text: &str, width: usize) -> String {
     }
 }
 
-fn aligned_text(text: &str, width: u16, alignment: TextAlignment) -> String {
+fn aligned_text(
+    text: &str,
+    width: u16,
+    alignment: TextAlignment,
+    selected_symbol_width: u16,
+) -> String {
+    let width = if matches!(alignment, TextAlignment::Center) {
+        width.saturating_sub(selected_symbol_width)
+    } else {
+        width
+    };
+
     if width == 0 {
         return text.to_string();
     }
@@ -565,15 +602,6 @@ fn aligned_text(text: &str, width: u16, alignment: TextAlignment) -> String {
             )
         }
     }
-}
-
-fn highlight_symbol_width(config: &crate::config::AppConfig) -> u16 {
-    config
-        .general
-        .highlight_symbol
-        .as_deref()
-        .map(|s| s.chars().count() as u16)
-        .unwrap_or(0)
 }
 
 fn interpolate_color(c1: Color, c2: Color, factor: f32) -> Color {
@@ -607,5 +635,22 @@ fn color_to_rgb(c: Color) -> (u8, u8, u8) {
         Color::LightMagenta => (255, 85, 255),
         Color::LightCyan => (85, 255, 255),
         _ => (255, 255, 255),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn center_alignment_accounts_for_selection_gutter() {
+        assert_eq!(
+            aligned_text("abcd", 10, TextAlignment::Center, 0),
+            "   abcd   "
+        );
+        assert_eq!(
+            aligned_text("abcd", 10, TextAlignment::Center, 2),
+            "  abcd  "
+        );
     }
 }

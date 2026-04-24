@@ -8,7 +8,7 @@ use std::{
     fs,
     io,
     os::unix::{fs::PermissionsExt, process::CommandExt},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -27,7 +27,6 @@ pub struct AppEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptAction {
-    CopyToClipboardAndExit,
     CopyToClipboard,
     SetStatusMessage,
     ClearStatusMessage,
@@ -39,8 +38,9 @@ pub enum ScriptAction {
     PopLastChar,
     ClearQuery,
     RefreshResults,
-    ExecuteAndExit,
-    ExecuteAndRefresh,
+    Execute,
+    ExitApp,
+    ResetPrompt,
     None,
 }
 
@@ -51,14 +51,48 @@ pub struct ScriptRowMeta {
     pub nonselectable: bool,
     pub permanent: bool,
     pub active: bool,
+    pub center: bool,
     pub urgent: bool,
+    pub fuzzy: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptMetadata {
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub author: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptMetaField {
+    Name,
+    Version,
+    Author,
+    Description,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptStorageWriteAction {
+    PFront,
+    PBack,
+    RmFront,
+    RmBack,
+    Purge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptStorageReadAction {
+    All,
+    FPeek,
+    BPeek,
 }
 
 #[derive(Debug, Clone)]
 pub struct ScriptItem {
     pub title: String,
     pub value: String,
-    pub action: ScriptAction,
+    pub actions: Vec<ScriptAction>,
     pub meta: ScriptRowMeta,
 }
 
@@ -85,6 +119,7 @@ pub struct App {
     pub filtered_files: Vec<String>,
     pub history: History,
     pub script_title: Option<String>,
+    pub script_meta: Option<ScriptMetadata>,
     pub script_items: Vec<ScriptItem>,
     pub qst_ascii: String,
     scripts: Vec<ScriptPlugin>,
@@ -136,6 +171,7 @@ impl App {
             filtered_files: Vec::new(),
             history,
             script_title: None,
+            script_meta: None,
             script_items: Vec::new(),
             qst_ascii,
             scripts,
@@ -206,6 +242,15 @@ impl App {
         self.search_cursor = Self::char_count(&self.search_query);
     }
 
+    fn reset_search_prompt(&mut self) {
+        if let Some(space_idx) = self.search_query.find(' ') {
+            let new_query = format!("{} ", self.search_query[..space_idx].trim());
+            self.set_search_query(new_query);
+        }
+
+        self.update_filter();
+    }
+
     fn script_item_is_selectable(&self, index: usize) -> bool {
         self.script_items
             .get(index)
@@ -230,6 +275,44 @@ impl App {
 
     fn parse_meta_bool(value: &str) -> bool {
         !matches!(value.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off")
+    }
+
+    fn parse_script_metadata_field(value: &str) -> Option<ScriptMetaField> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "name" => Some(ScriptMetaField::Name),
+            "version" => Some(ScriptMetaField::Version),
+            "author" => Some(ScriptMetaField::Author),
+            "description" => Some(ScriptMetaField::Description),
+            _ => None,
+        }
+    }
+
+    fn parse_script_metadata(value: &str) -> Option<ScriptMetadata> {
+        let mut parts = value.splitn(4, ',');
+        let name = parts.next().unwrap_or_default().trim();
+        let version = parts.next().unwrap_or_default().trim();
+        let author = parts.next().unwrap_or_default().trim();
+        let description = parts.next().unwrap_or_default().trim();
+
+        if [name, version, author, description].iter().all(|part| part.is_empty()) {
+            return None;
+        }
+
+        Some(ScriptMetadata {
+            name: (!name.is_empty()).then(|| name.to_string()),
+            version: (!version.is_empty()).then(|| version.to_string()),
+            author: (!author.is_empty()).then(|| author.to_string()),
+            description: (!description.is_empty()).then(|| description.to_string()),
+        })
+    }
+
+    fn script_metadata_field<'a>(metadata: &'a ScriptMetadata, field: ScriptMetaField) -> Option<&'a str> {
+        match field {
+            ScriptMetaField::Name => metadata.name.as_deref(),
+            ScriptMetaField::Version => metadata.version.as_deref(),
+            ScriptMetaField::Author => metadata.author.as_deref(),
+            ScriptMetaField::Description => metadata.description.as_deref(),
+        }
     }
 
     fn parse_script_row_meta(text: &str) -> (String, ScriptRowMeta) {
@@ -282,7 +365,9 @@ impl App {
                 "nonselectable" => meta.nonselectable = Self::parse_meta_bool(value),
                 "permanent" => meta.permanent = Self::parse_meta_bool(value),
                 "active" => meta.active = Self::parse_meta_bool(value),
+                "center" => meta.center = Self::parse_meta_bool(value),
                 "urgent" => meta.urgent = Self::parse_meta_bool(value),
+                "fuzzy" => meta.fuzzy = Self::parse_meta_bool(value),
                 _ => {}
             }
         }
@@ -300,12 +385,185 @@ impl App {
         target.nonselectable |= source.nonselectable;
         target.permanent |= source.permanent;
         target.active |= source.active;
+        target.center |= source.center;
         target.urgent |= source.urgent;
+        target.fuzzy |= source.fuzzy;
     }
 
     fn parse_script_row_text(text: &str) -> (String, ScriptRowMeta) {
         let (visible, meta) = Self::parse_script_row_meta(text);
         (visible, meta)
+    }
+
+    fn script_storage_root(script_id: &str) -> Option<PathBuf> {
+        let mut dir = config_dir()?;
+        dir.push("qst");
+        dir.push("storage");
+        dir.push(script_id);
+        Some(dir)
+    }
+
+    fn script_storage_path(script_id: &str, file_name: &str) -> Option<PathBuf> {
+        let file_name = file_name.trim();
+        if file_name.is_empty() {
+            return None;
+        }
+
+        let file_path = Path::new(file_name);
+        if file_path.is_absolute()
+            || file_path.components().any(|component| {
+                matches!(component, Component::ParentDir | Component::Prefix(_) | Component::RootDir)
+            })
+        {
+            return None;
+        }
+
+        let mut path = Self::script_storage_root(script_id)?;
+        path.push(file_path);
+        Some(path)
+    }
+
+    fn read_script_storage_lines(
+        script_id: &str,
+        file_name: &str,
+        read_action: ScriptStorageReadAction,
+    ) -> Vec<String> {
+        let Some(path) = Self::script_storage_path(script_id, file_name) else {
+            return Vec::new();
+        };
+
+        let Ok(content) = fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+
+        let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
+
+        match read_action {
+            ScriptStorageReadAction::All => lines,
+            ScriptStorageReadAction::FPeek => lines.into_iter().take(1).collect(),
+            ScriptStorageReadAction::BPeek => lines.pop().into_iter().collect(),
+        }
+    }
+
+    fn write_script_storage(
+        script_id: &str,
+        file_name: &str,
+        action: ScriptStorageWriteAction,
+        value: &str,
+    ) {
+        let Some(path) = Self::script_storage_path(script_id, file_name) else {
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            if fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+
+        let mut lines: Vec<String> = fs::read_to_string(&path)
+            .map(|content| content.lines().map(|line| line.to_string()).collect())
+            .unwrap_or_default();
+
+        match action {
+            ScriptStorageWriteAction::PFront => lines.insert(0, value.to_string()),
+            ScriptStorageWriteAction::PBack => lines.push(value.to_string()),
+            ScriptStorageWriteAction::RmFront => {
+                if !lines.is_empty() {
+                    lines.remove(0);
+                }
+            }
+            ScriptStorageWriteAction::RmBack => {
+                lines.pop();
+            }
+            ScriptStorageWriteAction::Purge => {
+                lines.retain(|line| line != value);
+            }
+        }
+
+        let content = lines.join("\n");
+        let _ = fs::write(&path, content);
+    }
+
+    fn delete_script_storage(script_id: &str, file_name: &str) {
+        let Some(path) = Self::script_storage_path(script_id, file_name) else {
+            return;
+        };
+
+        let _ = fs::remove_file(path);
+    }
+
+    fn script_item_search_text(item: &ScriptItem) -> String {
+        let mut parts = vec![item.title.as_str(), item.value.as_str()];
+        parts.extend(item.meta.meta.iter().map(String::as_str));
+        parts.join(" ")
+    }
+
+    fn parse_script_actions(value: &str) -> Vec<ScriptAction> {
+        let mut actions = Vec::new();
+
+        for token in value.split(',') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+
+            match token {
+                "CopyToClipboard" => actions.push(ScriptAction::CopyToClipboard),
+                "SetStatusMessage" => actions.push(ScriptAction::SetStatusMessage),
+                "ClearStatusMessage" => actions.push(ScriptAction::ClearStatusMessage),
+                "SetSearchQuery" => actions.push(ScriptAction::SetSearchQuery),
+                "AppendToQuery" => actions.push(ScriptAction::AppendToQuery),
+                "PrependToQuery" => actions.push(ScriptAction::PrependToQuery),
+                "ReplaceLastToken" => actions.push(ScriptAction::ReplaceLastToken),
+                "PopLastToken" => actions.push(ScriptAction::PopLastToken),
+                "PopLastChar" => actions.push(ScriptAction::PopLastChar),
+                "ClearQuery" => actions.push(ScriptAction::ClearQuery),
+                "RefreshResults" => actions.push(ScriptAction::RefreshResults),
+                "Execute" => actions.push(ScriptAction::Execute),
+                "ExitApp" => actions.push(ScriptAction::ExitApp),
+                "ResetPrompt" => actions.push(ScriptAction::ResetPrompt),
+                "None" => actions.push(ScriptAction::None),
+                _ => {}
+            }
+        }
+
+        if actions.is_empty() {
+            actions.push(ScriptAction::None);
+        }
+
+        actions
+    }
+
+    fn fuzzy_filter_script_items(
+        items: Vec<ScriptItem>,
+        query: &str,
+        script_fuzzy: bool,
+    ) -> Vec<ScriptItem> {
+        if query.trim().is_empty() {
+            return items;
+        }
+
+        let mut fuzzy_matches: Vec<(i64, usize, ScriptItem)> = Vec::new();
+        let mut passthrough_items: Vec<(usize, ScriptItem)> = Vec::new();
+
+        for (index, item) in items.into_iter().enumerate() {
+            let fuzzy_enabled = script_fuzzy || item.meta.fuzzy;
+            if fuzzy_enabled {
+                if let Some(score) = fuzzy_score(query, &Self::script_item_search_text(&item)) {
+                    fuzzy_matches.push((score, index, item));
+                }
+            } else {
+                passthrough_items.push((index, item));
+            }
+        }
+
+        fuzzy_matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+        let mut filtered = Vec::with_capacity(fuzzy_matches.len() + passthrough_items.len());
+        filtered.extend(fuzzy_matches.into_iter().map(|(_, _, item)| item));
+        filtered.extend(passthrough_items.into_iter().map(|(_, item)| item));
+        filtered
     }
 
     pub fn pop_last_query_token(&mut self) {
@@ -389,6 +647,7 @@ impl App {
         self.mode = AppMode::AppSelection;
         self.filtered_files.clear();
         self.script_title = None;
+        self.script_meta = None;
         self.script_items.clear();
 
         let query_slice_str = self.search_query.trim().to_string();
@@ -578,7 +837,10 @@ impl App {
                     let mut new_path = selected_file.clone();
 
                     let expanded_path = self.expand_path(&new_path);
-                    if Path::new(&expanded_path).is_dir() && !new_path.ends_with('/') {
+                    if Path::new(&expanded_path).is_dir()
+                        && !new_path.ends_with('/')
+                        && !new_path.ends_with("/.")
+                    {
                         new_path.push('/');
                     }
 
@@ -601,7 +863,7 @@ impl App {
                     if item.meta.nonselectable {
                         return;
                     }
-                    self.apply_script_action(&item);
+                    self.apply_script_actions(&item);
                 }
             }
             return;
@@ -609,12 +871,8 @@ impl App {
 
         if let Some(i) = self.list_state.selected() {
             if self.mode == AppMode::FileSelection && self.filtered_entries.is_empty() {
-                if self.should_use_selected_file_completion() {
-                    if let Some(selected_file) = self.filtered_files.get(i).cloned() {
-                        self.open_file(&selected_file);
-                    }
-                } else if let Some(query_path) = self.current_file_query_path() {
-                    self.open_file(&query_path);
+                if let Some(selected_file) = self.filtered_files.get(i).cloned() {
+                    self.open_file(&selected_file);
                 }
                 return;
             }
@@ -633,13 +891,11 @@ impl App {
                     if self.config.features.enable_launch_args {
                         if let Some(launch_args) = &self.launch_args {
                             let mut current_launch_args = launch_args.clone();
-                            
+
                             if self.mode == AppMode::FileSelection {
-                                if self.should_use_selected_file_completion() {
-                                    if let Some(selected_file) = self.filtered_files.get(i) {
-                                        if let Some(last) = current_launch_args.last_mut() {
-                                            *last = selected_file.clone();
-                                        }
+                                if let Some(selected_file) = self.filtered_files.get(i) {
+                                    if let Some(last) = current_launch_args.last_mut() {
+                                        *last = selected_file.clone();
                                     }
                                 }
                             }
@@ -760,33 +1016,6 @@ impl App {
             || query.starts_with("../")
     }
 
-    fn current_file_query_path(&self) -> Option<String> {
-        let query = self.search_query.trim();
-        if query.is_empty() {
-            return None;
-        }
-
-        let path = query
-            .rsplit_once(' ')
-            .map(|(_, tail)| tail)
-            .unwrap_or(query);
-
-        if Self::looks_like_path_query(path) {
-            Some(path.to_string())
-        } else {
-            None
-        }
-    }
-
-    fn should_use_selected_file_completion(&self) -> bool {
-        let Some(path) = self.current_file_query_path() else {
-            return true;
-        };
-
-        let segment_after_last_slash = path.rsplit('/').next().unwrap_or(path.as_str());
-        !segment_after_last_slash.is_empty()
-    }
-
     fn expand_path(&self, path: &str) -> String {
         if path == "~" {
             return std::env::var("HOME").unwrap_or_else(|_| path.to_string());
@@ -811,6 +1040,7 @@ impl App {
             .map(|(head, _)| format!("{}/", head))
             .unwrap_or_default();
         let is_directory_query = expanded_input.ends_with('/') || input_path.is_dir();
+        let show_current_dir_entry = query_path.ends_with('/');
 
         let (dir_path, prefix, display_root) = if is_directory_query {
             let root = if query_path.ends_with('/') {
@@ -860,6 +1090,10 @@ impl App {
             });
         } else {
             results.sort();
+        }
+
+        if show_current_dir_entry {
+            results.insert(0, format!("{}.", display_root));
         }
 
         results
@@ -1109,17 +1343,21 @@ impl App {
         self.mode = AppMode::ScriptResults;
 
         match self.run_script(&script, &payload) {
-            Ok((title, message, items)) => {
-                self.script_title = title.or_else(|| Some(format!(" {} ", script.id)));
+            Ok((title, message, meta, items)) => {
+                self.script_meta = meta.clone();
+                self.script_title = title
+                    .or_else(|| meta.and_then(|meta| meta.name).map(|name| format!(" {} ", name)))
+                    .or_else(|| Some(format!(" {} ", script.id)));
                 self.script_items = items;
                 self.status_message = message;
             }
             Err(err) => {
+                self.script_meta = None;
                 self.script_title = Some(format!(" {} ", script.id));
                 self.script_items = vec![ScriptItem {
                     title: format!("Script error: {}", err),
                     value: String::new(),
-                    action: ScriptAction::None,
+                    actions: vec![ScriptAction::None],
                     meta: ScriptRowMeta::default(),
                 }];
             }
@@ -1128,7 +1366,7 @@ impl App {
         true
     }
 
-    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Vec<ScriptItem>), String> {
+    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
         let mut command = if let Some(interpreter) = script.interpreter {
             let mut command = Command::new(interpreter);
             command.arg(&script.path);
@@ -1153,15 +1391,21 @@ impl App {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(Self::parse_script_output(&stdout))
+        Ok(Self::parse_script_output(&stdout, payload, &script.id))
     }
 
-    fn parse_script_output(output: &str) -> (Option<String>, Option<String>, Vec<ScriptItem>) {
+    fn parse_script_output(
+        output: &str,
+        query: &str,
+        script_id: &str,
+    ) -> (Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>) {
         let mut title: Option<String> = None;
         let mut message: Option<String> = None;
+        let mut meta: Option<ScriptMetadata> = None;
         let mut items = Vec::new();
-        let mut default_action = ScriptAction::None;
-        let mut next_item_action: Option<ScriptAction> = None;
+        let mut default_actions = vec![ScriptAction::None];
+        let mut next_item_actions: Option<Vec<ScriptAction>> = None;
+        let mut script_fuzzy = false;
 
         for raw in output.lines() {
             let line = raw.trim();
@@ -1169,13 +1413,45 @@ impl App {
                 continue;
             }
 
-            if let Some(directive) = line.strip_prefix("f! ") {
+            if let Some(directive) = line.strip_prefix("qst! ") {
+                if let Some(value) = directive.strip_prefix("meta ") {
+                    let value = value.trim();
+                    if let Some(parsed_meta) = Self::parse_script_metadata(value) {
+                        if title.is_none() {
+                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
+                                title = Some(format!(" {} ", name));
+                            }
+                        }
+                        meta = Some(parsed_meta);
+                        continue;
+                    }
+
+                    if let Some(field) = Self::parse_script_metadata_field(value) {
+                        if let Some(current_meta) = meta.as_ref() {
+                            if let Some(field_value) = Self::script_metadata_field(current_meta, field)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                message = Some(field_value.to_string());
+                            }
+                        }
+                        continue;
+                    }
+                }
                 if let Some(value) = directive.strip_prefix("title ") {
-                    title = Some(format!(" {} ", value.trim()));
+                    let (visible, meta) = Self::parse_script_row_text(value.trim());
+                    if meta.fuzzy {
+                        script_fuzzy = true;
+                    }
+                    title = Some(format!(" {} ", visible));
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("message ") {
-                    message = Some(value.trim().to_string());
+                    let (visible, meta) = Self::parse_script_row_text(value.trim());
+                    if meta.fuzzy {
+                        script_fuzzy = true;
+                    }
+                    message = Some(visible);
                     continue;
                 }
                 if directive == "clear_message" {
@@ -1183,19 +1459,53 @@ impl App {
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("action ") {
-                    default_action = Self::parse_script_action(value.trim());
+                    default_actions = Self::parse_script_actions(value.trim());
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("default_item_action ") {
-                    default_action = Self::parse_script_action(value.trim());
+                    default_actions = Self::parse_script_actions(value.trim());
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("item_action ") {
-                    next_item_action = Some(Self::parse_script_action(value.trim()));
+                    next_item_actions = Some(Self::parse_script_actions(value.trim()));
                     continue;
                 }
                 if directive == "clear" {
                     items.clear();
+                    continue;
+                }
+                if let Some(value) = directive.strip_prefix("write ") {
+                    let mut parts = value.splitn(3, '|');
+                    let file_name = parts.next().unwrap_or_default().trim();
+                    let action = parts
+                        .next()
+                        .map(|action| action.trim())
+                        .and_then(Self::parse_script_storage_write_action);
+                    let stored_value = parts.next().unwrap_or_default().trim();
+                    if let Some(action) = action {
+                        Self::write_script_storage(script_id, file_name, action, stored_value);
+                    }
+                    continue;
+                }
+                if let Some(value) = directive.strip_prefix("read ") {
+                    let mut parts = value.splitn(2, '|');
+                    let file_name = parts.next().unwrap_or_default().trim();
+                    let read_action = parts
+                        .next()
+                        .map(|action| action.trim())
+                        .and_then(Self::parse_script_storage_read_action)
+                        .unwrap_or(ScriptStorageReadAction::All);
+                    let read_items = Self::read_script_storage_lines(script_id, file_name, read_action);
+                    Self::append_storage_rows(
+                        &mut items,
+                        read_items,
+                        &mut next_item_actions,
+                        &default_actions,
+                    );
+                    continue;
+                }
+                if let Some(value) = directive.strip_prefix("delete ") {
+                    Self::delete_script_storage(script_id, value.trim());
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("single ") {
@@ -1207,11 +1517,14 @@ impl App {
                     } else {
                         format!("{} = {}", query, result_text)
                     };
+                    let actions = next_item_actions
+                        .take()
+                        .unwrap_or_else(|| default_actions.clone());
                     items.clear();
                     items.push(ScriptItem {
                         title: label,
                         value: result_text,
-                        action: next_item_action.take().unwrap_or(default_action.clone()),
+                        actions,
                         meta: result_meta,
                     });
                     continue;
@@ -1229,24 +1542,26 @@ impl App {
                             if action_text.is_empty() {
                                 None
                             } else {
-                                Some((Self::parse_script_action(action_text), meta))
+                                Some((Self::parse_script_actions(action_text), meta))
                             }
                         })
-                        .unwrap_or((ScriptAction::None, ScriptRowMeta::default()));
+                        .unwrap_or((Vec::new(), ScriptRowMeta::default()));
                     if !item_title.is_empty() {
                         let mut meta = ScriptRowMeta::default();
                         Self::apply_script_row_meta(&mut meta, title_meta);
                         Self::apply_script_row_meta(&mut meta, value_meta);
                         Self::apply_script_row_meta(&mut meta, action_meta);
-                        let action = if explicit_action != ScriptAction::None {
-                            explicit_action
+                        let actions = if explicit_action.is_empty() {
+                            next_item_actions
+                                .take()
+                                .unwrap_or_else(|| default_actions.clone())
                         } else {
-                            next_item_action.take().unwrap_or(default_action.clone())
+                            explicit_action
                         };
                         items.push(ScriptItem {
                             title: item_title,
                             value: item_value,
-                            action,
+                            actions,
                             meta,
                         });
                     }
@@ -1265,99 +1580,68 @@ impl App {
             let mut meta = ScriptRowMeta::default();
             Self::apply_script_row_meta(&mut meta, title_meta);
             Self::apply_script_row_meta(&mut meta, value_meta);
+            let actions = next_item_actions
+                .take()
+                .unwrap_or_else(|| default_actions.clone());
             items.push(ScriptItem {
                 title: item_title,
                 value: item_value,
-                action: next_item_action.take().unwrap_or(default_action.clone()),
+                actions,
                 meta,
             });
         }
 
-        (title, message, items)
+        let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy);
+        let mut items = items;
+        items.sort_by(|a, b| b.meta.urgent.cmp(&a.meta.urgent));
+
+        (title, message, meta, items)
     }
 
-    fn parse_script_action(value: &str) -> ScriptAction {
+    fn append_storage_rows(
+        items: &mut Vec<ScriptItem>,
+        lines: Vec<String>,
+        next_item_actions: &mut Option<Vec<ScriptAction>>,
+        default_actions: &[ScriptAction],
+    ) {
+        for line in lines {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let actions = next_item_actions
+                .take()
+                .unwrap_or_else(|| default_actions.to_vec());
+            items.push(ScriptItem {
+                title: line.clone(),
+                value: line,
+                actions,
+                meta: ScriptRowMeta::default(),
+            });
+        }
+    }
+
+    fn parse_script_storage_write_action(value: &str) -> Option<ScriptStorageWriteAction> {
         match value {
-            "CopyToClipboardAndExit" => ScriptAction::CopyToClipboardAndExit,
-            "CopyToClipboard" => ScriptAction::CopyToClipboard,
-            "SetStatusMessage" => ScriptAction::SetStatusMessage,
-            "ClearStatusMessage" => ScriptAction::ClearStatusMessage,
-            "SetSearchQuery" => ScriptAction::SetSearchQuery,
-            "AppendToQuery" => ScriptAction::AppendToQuery,
-            "PrependToQuery" => ScriptAction::PrependToQuery,
-            "ReplaceLastToken" => ScriptAction::ReplaceLastToken,
-            "PopLastToken" => ScriptAction::PopLastToken,
-            "PopLastChar" => ScriptAction::PopLastChar,
-            "ClearQuery" => ScriptAction::ClearQuery,
-            "RefreshResults" => ScriptAction::RefreshResults,
-            "ExecuteAndExit" => ScriptAction::ExecuteAndExit,
-            "ExecuteAndRefresh" => ScriptAction::ExecuteAndRefresh,
-            _ => ScriptAction::None,
+            "pfront" => Some(ScriptStorageWriteAction::PFront),
+            "pback" => Some(ScriptStorageWriteAction::PBack),
+            "rmfront" => Some(ScriptStorageWriteAction::RmFront),
+            "rmback" => Some(ScriptStorageWriteAction::RmBack),
+            "purge" => Some(ScriptStorageWriteAction::Purge),
+            _ => None,
         }
     }
 
-    fn apply_script_action(&mut self, item: &ScriptItem) {
-        match item.action {
-            ScriptAction::None => {}
-            ScriptAction::SetSearchQuery => {
-                self.set_search_query(item.value.clone());
-                self.update_filter();
-            }
-            ScriptAction::AppendToQuery => self.insert_search_text(&item.value),
-            ScriptAction::PrependToQuery => {
-                self.set_search_query(format!("{}{}", item.value, self.search_query));
-                self.update_filter();
-            }
-            ScriptAction::ReplaceLastToken => {
-                self.replace_last_query_token(&item.value);
-                self.update_filter();
-            }
-            ScriptAction::PopLastToken => {
-                self.pop_last_query_token();
-                self.update_filter();
-            }
-            ScriptAction::PopLastChar => {
-                self.pop_last_query_char();
-                self.update_filter();
-            }
-            ScriptAction::ClearQuery => {
-                self.set_search_query(String::new());
-                self.update_filter();
-            }
-            ScriptAction::RefreshResults => {
-                self.update_filter();
-            }
-            ScriptAction::CopyToClipboard => {
-                if let Err(err) = self.copy_to_clipboard(&item.value) {
-                    self.status_message = Some(format!("Clipboard failed: {}", err));
-                } else {
-                    self.status_message = Some("Copied to clipboard".to_string());
-                }
-            }
-            ScriptAction::SetStatusMessage => {
-                self.status_message = Some(item.value.clone());
-            }
-            ScriptAction::ClearStatusMessage => {
-                self.status_message = None;
-            }
-            ScriptAction::CopyToClipboardAndExit => {
-                if let Err(err) = self.copy_to_clipboard(&item.value) {
-                    self.status_message = Some(format!("Clipboard failed: {}", err));
-                } else {
-                    self.should_quit = true;
-                }
-            }
-            ScriptAction::ExecuteAndExit => {
-                self.execute_shell_command(&item.value, true);
-            }
-            ScriptAction::ExecuteAndRefresh => {
-                self.execute_shell_command(&item.value, false);
-                self.update_filter();
-            }
+    fn parse_script_storage_read_action(value: &str) -> Option<ScriptStorageReadAction> {
+        match value {
+            "all" => Some(ScriptStorageReadAction::All),
+            "fpeek" => Some(ScriptStorageReadAction::FPeek),
+            "bpeek" => Some(ScriptStorageReadAction::BPeek),
+            _ => None,
         }
     }
 
-    fn execute_shell_command(&mut self, command_text: &str, exit_after: bool) {
+    fn spawn_shell_command(command_text: &str) -> Result<std::process::Child, String> {
         let mut command = Command::new("sh");
         command
             .arg("-lc")
@@ -1374,15 +1658,99 @@ impl App {
             });
         }
 
-        match command.spawn() {
-            Ok(_) => {
-                self.status_message = None;
-                if exit_after {
-                    self.should_quit = true;
+        command.spawn().map_err(|err| err.to_string())
+    }
+
+    fn apply_script_actions(&mut self, item: &ScriptItem) {
+        let mut pending_execute: Option<std::process::Child> = None;
+
+        for action in &item.actions {
+            let should_continue = match action {
+                ScriptAction::None => true,
+                ScriptAction::SetSearchQuery => {
+                    self.set_search_query(item.value.clone());
+                    self.update_filter();
+                    true
                 }
-            }
-            Err(err) => {
-                self.status_message = Some(format!("Failed to execute command: {}", err));
+                ScriptAction::AppendToQuery => {
+                    self.insert_search_text(&item.value);
+                    true
+                }
+                ScriptAction::PrependToQuery => {
+                    self.set_search_query(format!("{}{}", item.value, self.search_query));
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::ReplaceLastToken => {
+                    self.replace_last_query_token(&item.value);
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::PopLastToken => {
+                    self.pop_last_query_token();
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::PopLastChar => {
+                    self.pop_last_query_char();
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::ClearQuery => {
+                    self.set_search_query(String::new());
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::RefreshResults => {
+                    self.update_filter();
+                    true
+                }
+                ScriptAction::CopyToClipboard => match self.copy_to_clipboard(&item.value) {
+                    Ok(()) => {
+                        self.status_message = Some("Copied to clipboard".to_string());
+                        true
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Clipboard failed: {}", err));
+                        false
+                    }
+                },
+                ScriptAction::SetStatusMessage => {
+                    self.status_message = Some(item.value.clone());
+                    true
+                }
+                ScriptAction::ClearStatusMessage => {
+                    self.status_message = None;
+                    true
+                }
+                ScriptAction::Execute => match Self::spawn_shell_command(&item.value) {
+                    Ok(child) => {
+                        pending_execute = Some(child);
+                        self.status_message = None;
+                        true
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Failed to execute command: {}", err));
+                        false
+                    }
+                },
+                ScriptAction::ExitApp => {
+                    self.should_quit = true;
+                    self.status_message = None;
+                    true
+                }
+                ScriptAction::ResetPrompt => {
+                    if let Some(mut child) = pending_execute.take() {
+                        let _ = child.wait();
+                    }
+
+                    self.reset_search_prompt();
+                    true
+                }
+            };
+
+            if !should_continue {
+                break;
             }
         }
     }
@@ -1501,5 +1869,177 @@ pub(crate) fn fuzzy_score(query: &str, target: &str) -> Option<i64> {
 #[allow(dead_code)]
 fn fuzzy_match(query: &str, target: &str) -> bool {
     fuzzy_score(query, target).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+
+    struct TempDirCleanup(PathBuf);
+
+    impl Drop for TempDirCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_app() -> App {
+        App {
+            search_query: String::new(),
+            search_cursor: 0,
+            entries: Vec::new(),
+            filtered_entries: Vec::new(),
+            list_state: ListState::default(),
+            should_quit: false,
+            config: AppConfig::default(),
+            status_message: None,
+            launch_args: None,
+            mode: AppMode::AppSelection,
+            filtered_files: Vec::new(),
+            history: History::default(),
+            script_title: None,
+            script_meta: None,
+            script_items: Vec::new(),
+            qst_ascii: String::new(),
+            scripts: Vec::new(),
+        }
+    }
+
+    fn unique_temp_path() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("qst-file-completions-{}-{}", std::process::id(), suffix))
+    }
+
+    #[test]
+    fn parse_script_row_text_strips_fuzzy_and_center_meta() {
+        let (visible, meta) = App::parse_script_row_text(
+            "Clipboard entry @meta:fuzzy=true @meta:center=true",
+        );
+
+        assert_eq!(visible, "Clipboard entry");
+        assert!(meta.fuzzy);
+        assert!(meta.center);
+    }
+
+    #[test]
+    fn apply_script_row_meta_merges_center_flag() {
+        let mut target = ScriptRowMeta::default();
+
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                center: true,
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert!(target.center);
+    }
+
+    #[test]
+    fn fuzzy_filter_keeps_non_fuzzy_rows_and_matches_fuzzy_rows() {
+        let fuzzy_item = ScriptItem {
+            title: "Clipboard history".to_string(),
+            value: "Clipboard history".to_string(),
+            actions: vec![ScriptAction::None],
+            meta: ScriptRowMeta {
+                fuzzy: true,
+                ..ScriptRowMeta::default()
+            },
+        };
+        let plain_item = ScriptItem {
+            title: "Terminal".to_string(),
+            value: "Terminal".to_string(),
+            actions: vec![ScriptAction::None],
+            meta: ScriptRowMeta::default(),
+        };
+
+        let filtered = App::fuzzy_filter_script_items(vec![plain_item.clone(), fuzzy_item.clone()], "clb", false);
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].title, fuzzy_item.title);
+        assert_eq!(filtered[1].title, plain_item.title);
+    }
+
+    #[test]
+    fn parse_script_actions_supports_comma_separated_composition() {
+        assert_eq!(
+            App::parse_script_actions("CopyToClipboard,ExitApp"),
+            vec![ScriptAction::CopyToClipboard, ScriptAction::ExitApp]
+        );
+
+        assert_eq!(
+            App::parse_script_actions("Execute,RefreshResults"),
+            vec![ScriptAction::Execute, ScriptAction::RefreshResults]
+        );
+
+        assert_eq!(
+            App::parse_script_actions("Execute,ResetPrompt"),
+            vec![ScriptAction::Execute, ScriptAction::ResetPrompt]
+        );
+    }
+
+    #[test]
+    fn parse_script_output_parses_script_metadata_header() {
+        let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! title My Awesome script\n";
+
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+
+        assert_eq!(title.as_deref(), Some(" My Awesome script "));
+        assert!(message.is_none());
+        assert!(items.is_empty());
+
+        let meta = meta.expect("metadata should be captured");
+        assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
+        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert_eq!(meta.author.as_deref(), Some("John Doe"));
+        assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
+    }
+
+    #[test]
+    fn parse_script_output_supports_script_metadata_field_selection() {
+        let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! meta author\n";
+
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+
+        assert_eq!(title.as_deref(), Some(" My Awesome script "));
+        assert_eq!(message.as_deref(), Some("John Doe"));
+        assert!(items.is_empty());
+
+        let meta = meta.expect("metadata should be captured");
+        assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
+        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert_eq!(meta.author.as_deref(), Some("John Doe"));
+        assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
+    }
+
+    #[test]
+    fn list_completions_prepends_current_directory_entry_at_trailing_slash() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        let projects = root.join("Projects");
+        let nested_dir = projects.join("docs");
+        let nested_file = projects.join("alpha.txt");
+
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(&nested_file, "alpha").unwrap();
+
+        let app = test_app();
+        let query = format!("{}/", projects.display());
+        let dot_entry = format!("{}.", query);
+        let completions = app.list_completions(&query);
+
+        assert_eq!(completions.first().map(String::as_str), Some(dot_entry.as_str()));
+        assert!(completions.iter().any(|entry| entry == &format!("{}docs/", query)));
+        assert!(completions.iter().any(|entry| entry == &format!("{}alpha.txt", query)));
+
+        let filtered = app.list_completions(&format!("{}a", query));
+        assert_eq!(filtered, vec![format!("{}alpha.txt", query)]);
+    }
 }
 

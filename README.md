@@ -25,15 +25,21 @@ The plugin ecosystem is cataloged in `awesome-qst`:
 
 ## Install
 
+Install via Nix (recommended):
+```bash
+nix profile install "github:GitanElyon/qst"
+```
+
+Or via Cargo:
+```bash
+cargo install --locked qst
+```
+
+Or build from source:
 ```bash
 git clone https://github.com/GitanElyon/qst.git
 cd qst
 cargo install --locked --path .
-```
-
-Nix users can install via:
-```bash
-nix profile install "github:GitanElyon/qst"
 ```
 
 ## Usage

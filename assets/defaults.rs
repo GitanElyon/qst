@@ -24,12 +24,11 @@ AppConfig {
         bg: vec![String::from("#000000")],
         border_color: vec![],
         border_angle: 90,
-        gradient_angle: 90,
-        full_width_highlight: None,
         rounded: None,
         borders: None,
         visible: Some(false),
         title_alignment: None,
+        ..SectionConfig::default()
     },
     outer_box: SectionConfig {
         title: Some(String::from(" qst ")),
@@ -37,26 +36,17 @@ AppConfig {
         bg: vec![],
         border_color: vec![String::from("#cdd6f4")],
         border_angle: 90,
-        gradient_angle: 90,
-        full_width_highlight: None,
         rounded: None,
         borders: None,
         visible: Some(false),
         title_alignment: None,
+        ..SectionConfig::default()
     },
     qst_ascii: QstAsciiConfig {
         section: SectionConfig {
-            title: None,
-            fg: vec![],
-            bg: vec![],
-            border_color: vec![],
-            border_angle: 90,
-            gradient_angle: 90,
-            full_width_highlight: None,
-            rounded: None,
-            borders: None,
             visible: Some(true),
-            title_alignment: None,
+            fg: vec![],
+            ..SectionConfig::default()
         },
         gradient_colors: vec![String::from("#6464ff"), String::from("#c864ff")],
         gradient_angle: 90,
@@ -75,12 +65,11 @@ AppConfig {
         bg: vec![],
         border_color: vec![String::from("#6464ff")],
         border_angle: 90,
-        gradient_angle: 90,
-        full_width_highlight: None,
         rounded: None,
         borders: None,
         visible: None,
         title_alignment: None,
+        ..SectionConfig::default()
     },
     list: ResultsConfig {
         section: SectionConfig {
@@ -89,12 +78,11 @@ AppConfig {
             bg: vec![],
             border_color: vec![String::from("#c864ff")],
             border_angle: 90,
-            gradient_angle: 90,
-            full_width_highlight: None,
             rounded: None,
             borders: None,
             visible: None,
             title_alignment: None,
+            ..SectionConfig::default()
         },
         apps_title: None,
         files_title: None,
@@ -105,31 +93,29 @@ AppConfig {
         gradient_angle: 90,
     },
     entry_selected: SectionConfig {
-        title: None,
         fg: vec![String::from("#111111")],
         bg: vec![String::from("#888888")],
-        border_color: vec![],
-        border_angle: 90,
-        gradient_angle: 0,
         full_width_highlight: Some(true),
-        rounded: None,
-        borders: None,
-        visible: None,
-        title_alignment: None,
+        ..SectionConfig::default()
+    },
+    meta: MetaConfig {
+        active: SectionConfig {
+            fg: vec![],
+            bg: vec![String::from("#555555")],
+            ..SectionConfig::default()
+        },
+        urgent: SectionConfig {
+            fg: vec![String::from("red")],
+            bg: vec![],
+            ..SectionConfig::default()
+        },
     },
     text: TextConfig {
         section: SectionConfig {
-            title: None,
             fg: vec![String::from("#f2f5f7")],
             bg: vec![],
-            border_color: vec![],
-            border_angle: 90,
-            gradient_angle: 90,
-            full_width_highlight: None,
-            rounded: None,
-            borders: None,
             visible: None,
-            title_alignment: None,
+            ..SectionConfig::default()
         },
         alignment: Some(TextAlignment::Left),
     },
