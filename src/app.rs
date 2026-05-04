@@ -1770,6 +1770,14 @@ impl App {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                Ok(()) as io::Result<()>
+            });
+        }
+
         let mut child = command.spawn().map_err(|err| err.to_string())?;
         if let Some(stdin) = child.stdin.as_mut() {
             use std::io::Write;
@@ -1778,12 +1786,8 @@ impl App {
                 .map_err(|err| err.to_string())?;
         }
 
-        let output = child.wait_with_output().map_err(|err| err.to_string())?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-        }
+        drop(child);
+        Ok(())
     }
 }
 
