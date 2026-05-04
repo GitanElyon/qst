@@ -131,13 +131,18 @@ fn main() -> Result<()> {
 }
 
 fn matches_key(key: &event::KeyEvent, config_str: &str) -> bool {
-    let config_str = config_str.to_lowercase();
-    let parts: Vec<&str> = config_str.split('+').collect();
-    
+    let Some((required_modifiers, required_code)) = parse_key_binding(config_str) else {
+        return false;
+    };
+
+    key.code == required_code && key.modifiers.contains(required_modifiers)
+}
+
+fn parse_key_binding(config_str: &str) -> Option<(KeyModifiers, KeyCode)> {
     let mut required_modifiers = KeyModifiers::empty();
     let mut required_code = None;
 
-    for part in parts {
+    for part in config_str.to_lowercase().split('+').map(str::trim).filter(|part| !part.is_empty()) {
         match part {
             "ctrl" | "control" => required_modifiers.insert(KeyModifiers::CONTROL),
             "alt" | "option" => required_modifiers.insert(KeyModifiers::ALT),
@@ -152,21 +157,37 @@ fn matches_key(key: &event::KeyEvent, config_str: &str) -> bool {
             "down" => required_code = Some(KeyCode::Down),
             "left" => required_code = Some(KeyCode::Left),
             "right" => required_code = Some(KeyCode::Right),
-            s if s.len() == 1 => required_code = Some(KeyCode::Char(s.chars().next().unwrap())),
-            s if s.starts_with('f') && s.len() > 1 => {
-                 if let Ok(n) = s[1..].parse::<u8>() {
-                     required_code = Some(KeyCode::F(n));
-                 }
+            s if s.len() == 1 => {
+                if let Some(ch) = s.chars().next() {
+                    required_code = Some(KeyCode::Char(ch));
+                } else {
+                    return None;
+                }
             }
-            _ => {}
+            s if s.starts_with('f') && s.len() > 1 => {
+                if let Ok(n) = s[1..].parse::<u8>() {
+                    required_code = Some(KeyCode::F(n));
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
         }
     }
 
-    if let Some(code) = required_code {
-        if key.code != code {
-            return false;
-        }
+    required_code.map(|code| (required_modifiers, code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_key_rejects_malformed_bindings() {
+        let key = event::KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT);
+
+        assert!(matches_key(&key, "alt+f"));
+        assert!(!matches_key(&key, "alt+"));
+        assert!(!matches_key(&key, "bogus"));
     }
-    
-    key.modifiers.contains(required_modifiers)
 }
