@@ -6,10 +6,12 @@ use ratatui::widgets::ListState;
 use std::{
     collections::HashMap,
     fs,
-    io,
+    io::{self, Read},
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,6 +128,8 @@ pub struct App {
 }
 
 impl App {
+    const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
+
     pub fn new(config: AppConfig, status_message: Option<String>) -> Self {
         let (mut script_aliases, mut app_aliases) = Self::load_aliases();
         let history = History::load();
@@ -1367,6 +1371,15 @@ impl App {
     }
 
     fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
+        self.run_script_with_timeout(script, payload, Self::SCRIPT_TIMEOUT)
+    }
+
+    fn run_script_with_timeout(
+        &self,
+        script: &ScriptPlugin,
+        payload: &str,
+        timeout: Duration,
+    ) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
         let mut command = if let Some(interpreter) = script.interpreter {
             let mut command = Command::new(interpreter);
             command.arg(&script.path);
@@ -1375,23 +1388,77 @@ impl App {
             Command::new(&script.path)
         };
 
-        let output = command
+        let mut child = command
             .arg(payload)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
             .map_err(|err| err.to_string())?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to capture script stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "failed to capture script stderr".to_string())?;
+
+        let stdout_handle = thread::spawn(move || Self::read_pipe(stdout));
+        let stderr_handle = thread::spawn(move || Self::read_pipe(stderr));
+
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait().map_err(|err| err.to_string())? {
+                Some(status) => break status,
+                None => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = stdout_handle.join();
+                        let _ = stderr_handle.join();
+                        return Err(format!("script timed out after {:?}", timeout));
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+            }
+        };
+
+        let (stdout, stderr) = Self::collect_script_output(stdout_handle, stderr_handle)?;
+
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
             if stderr.is_empty() {
-                return Err(format!("exit code {:?}", output.status.code()));
+                return Err(format!("exit code {:?}", status.code()));
             }
             return Err(stderr);
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&stdout);
         Ok(Self::parse_script_output(&stdout, payload, &script.id))
+    }
+
+    fn read_pipe<R>(mut pipe: R) -> Vec<u8>
+    where
+        R: Read + Send + 'static,
+    {
+        let mut output = Vec::new();
+        let _ = pipe.read_to_end(&mut output);
+        output
+    }
+
+    fn collect_script_output(
+        stdout_handle: thread::JoinHandle<Vec<u8>>,
+        stderr_handle: thread::JoinHandle<Vec<u8>>,
+    ) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let stdout = stdout_handle
+            .join()
+            .map_err(|_| "failed to read script stdout".to_string())?;
+        let stderr = stderr_handle
+            .join()
+            .map_err(|_| "failed to read script stderr".to_string())?;
+
+        Ok((stdout, stderr))
     }
 
     fn parse_script_output(
@@ -1878,7 +1945,7 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
 
     struct TempDirCleanup(PathBuf);
 
@@ -2044,6 +2111,32 @@ mod tests {
 
         let filtered = app.list_completions(&format!("{}a", query));
         assert_eq!(filtered, vec![format!("{}alpha.txt", query)]);
+    }
+
+    #[test]
+    fn run_script_times_out_for_hanging_scripts() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("hang.sh");
+        fs::write(&script_path, "#!/bin/sh\nsleep 1\n").unwrap();
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let app = test_app();
+        let script = ScriptPlugin {
+            id: "hang".to_string(),
+            file_id: "hang.sh".to_string(),
+            path: script_path,
+            trigger: None,
+            interpreter: None,
+        };
+
+        let err = app
+            .run_script_with_timeout(&script, "", Duration::from_millis(50))
+            .expect_err("script should time out");
+
+        assert!(err.contains("timed out"));
     }
 }
 
