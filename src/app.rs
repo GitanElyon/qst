@@ -1483,16 +1483,6 @@ impl App {
             if let Some(directive) = line.strip_prefix("qst! ") {
                 if let Some(value) = directive.strip_prefix("meta ") {
                     let value = value.trim();
-                    if let Some(parsed_meta) = Self::parse_script_metadata(value) {
-                        if title.is_none() {
-                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
-                                title = Some(format!(" {} ", name));
-                            }
-                        }
-                        meta = Some(parsed_meta);
-                        continue;
-                    }
-
                     if let Some(field) = Self::parse_script_metadata_field(value) {
                         if let Some(current_meta) = meta.as_ref() {
                             if let Some(field_value) = Self::script_metadata_field(current_meta, field)
@@ -1502,6 +1492,16 @@ impl App {
                                 message = Some(field_value.to_string());
                             }
                         }
+                        continue;
+                    }
+
+                    if let Some(parsed_meta) = Self::parse_script_metadata(value) {
+                        if title.is_none() {
+                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
+                                title = Some(format!(" {} ", name));
+                            }
+                        }
+                        meta = Some(parsed_meta);
                         continue;
                     }
                 }
@@ -2137,6 +2137,13 @@ mod tests {
             .expect_err("script should time out");
 
         assert!(err.contains("timed out"));
+    }
+
+    #[test]
+    fn script_storage_path_rejects_absolute_and_parent_paths() {
+        assert!(App::script_storage_path("sample", "/tmp/data").is_none());
+        assert!(App::script_storage_path("sample", "../data").is_none());
+        assert!(App::script_storage_path("sample", "nested/data").is_some());
     }
 }
 
