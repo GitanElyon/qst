@@ -22,6 +22,25 @@ Script integration uses:
 
 `config.toml` is created automatically on first run.
 
+## Command-line options
+
+qst also supports launch-time flags:
+
+- `-p, --program <name>`
+  - Launch a program directly using fuzzy matching and exit without opening the UI.
+- `-s, --script <script>`
+  - Start qst with that script opened by default.
+- `--list-programs`
+  - Print all launchable desktop programs.
+- `--list-scripts`
+  - Print all scripts and their metadata.
+- `--gen-config`
+  - Generate `~/.config/qst/config.toml`.
+- `-h, --help`
+  - Print the CLI help text.
+
+`--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
+
 ## Important defaults
 
 From `[features]` in `config.toml`:

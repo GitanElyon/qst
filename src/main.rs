@@ -4,75 +4,41 @@ mod history;
 mod ui;
 
 use crate::{app::App, config::AppConfig, ui::draw};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::prelude::*;
+use dirs::config_dir;
+use std::fs;
 use std::io;
 use std::env;
-use std::fs;
-use dirs::config_dir;
+
+enum CliAction {
+    Interactive,
+    GenerateConfig,
+    Help,
+    ListPrograms,
+    ListScripts,
+    LaunchProgram(String),
+    LaunchScript(String),
+}
 
 fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() > 1 {
-        match args[1].as_str() {
-            "--gen-config" => {
-                if let Some(mut path) = config_dir() {
-                    path.push("qst");
-                    if fs::create_dir_all(&path).is_err() {
-                        eprintln!("Error: Unable to create configuration directory: {:?}", path);
-                        std::process::exit(1);
-                    }
-                    path.push("config.toml");
+    let action = parse_cli_action(env::args().skip(1))?;
 
-                    if path.exists() {
-                        eprintln!("Error: Configuration file already exists at {:?}", path);
-                        std::process::exit(1);
-                    }
-
-                    // We generate the TOML directly from the default struct 
-                    // which is now defined in assets/defaults.rs
-                    let default_config_struct = AppConfig::default();
-                    match toml::to_string_pretty(&default_config_struct) {
-                        Ok(serialized) => {
-                            match fs::write(&path, serialized) {
-                                Ok(_) => {
-                                    println!("Successfully generated default configuration at {:?}", path);
-                                    std::process::exit(0);
-                                }
-                                Err(e) => {
-                                    eprintln!("Error writing configuration file: {}", e);
-                                    std::process::exit(1);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error serializing default configuration: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                } else {
-                    eprintln!("Error: Could not determine configuration directory.");
-                    std::process::exit(1);
-                }
-            }
-            "-h" | "--help" => {
-                println!("Qst - An Application Launcher");
-                println!("Usage: qst [OPTIONS]");
-                println!("");
-                println!("Options:");
-                println!("  --gen-config    Generate a default config file at ~/.config/qst/config.toml");
-                println!("                  (Fails if file already exists)");
-                println!("  -h, --help      Print this help message");
-                std::process::exit(0);
-            }
-            _ => {
-            }
+    match action {
+        CliAction::Help => {
+            print_help();
+            return Ok(());
         }
+        CliAction::GenerateConfig => {
+            generate_default_config()?;
+            return Ok(());
+        }
+        _ => {}
     }
 
     let load_result = AppConfig::load();
@@ -80,13 +46,35 @@ fn main() -> Result<()> {
         eprintln!("{warning}");
     }
 
+    let mut app = App::new(load_result.config, load_result.warning);
+
+    match action {
+        CliAction::Interactive => {}
+        CliAction::ListPrograms => {
+            print_programs(&app);
+            return Ok(());
+        }
+        CliAction::ListScripts => {
+            print_scripts(&app);
+            return Ok(());
+        }
+        CliAction::LaunchProgram(program_name) => {
+            app.launch_program_by_name(&program_name)
+                .map_err(anyhow::Error::msg)?;
+            return Ok(());
+        }
+        CliAction::LaunchScript(script_name) => {
+            app.launch_script_mode(&script_name)
+                .map_err(anyhow::Error::msg)?;
+        }
+        CliAction::Help | CliAction::GenerateConfig => unreachable!(),
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new(load_result.config, load_result.warning);
 
     loop {
         terminal.draw(|f| draw(f, &mut app))?;
@@ -128,6 +116,123 @@ fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
     Ok(())
+}
+
+fn parse_cli_action(args: impl IntoIterator<Item = String>) -> Result<CliAction> {
+    let mut action = None;
+    let mut args = args.into_iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--gen-config" => set_cli_action(&mut action, CliAction::GenerateConfig)?,
+            "-h" | "--help" => set_cli_action(&mut action, CliAction::Help)?,
+            "--list-programs" => set_cli_action(&mut action, CliAction::ListPrograms)?,
+            "--list-scripts" => set_cli_action(&mut action, CliAction::ListScripts)?,
+            "-p" | "--program" => {
+                let Some(program_name) = args.next() else {
+                    return Err(anyhow!("--program requires a program name"));
+                };
+                set_cli_action(&mut action, CliAction::LaunchProgram(program_name))?;
+            }
+            "-s" | "--script" => {
+                let Some(script_name) = args.next() else {
+                    return Err(anyhow!("--script requires a script name"));
+                };
+                set_cli_action(&mut action, CliAction::LaunchScript(script_name))?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(action.unwrap_or(CliAction::Interactive))
+}
+
+fn set_cli_action(action: &mut Option<CliAction>, next: CliAction) -> Result<()> {
+    if action.is_some() {
+        return Err(anyhow!("only one qst action can be specified at a time"));
+    }
+
+    *action = Some(next);
+    Ok(())
+}
+
+fn generate_default_config() -> Result<()> {
+    let Some(mut path) = config_dir() else {
+        return Err(anyhow!("Could not determine configuration directory"));
+    };
+
+    path.push("qst");
+    if fs::create_dir_all(&path).is_err() {
+        return Err(anyhow!("Unable to create configuration directory: {:?}", path));
+    }
+    path.push("config.toml");
+
+    if path.exists() {
+        return Err(anyhow!("Configuration file already exists at {:?}", path));
+    }
+
+    let default_config_struct = AppConfig::default();
+    let serialized = toml::to_string_pretty(&default_config_struct)
+        .map_err(|err| anyhow!("Error serializing default configuration: {}", err))?;
+
+    fs::write(&path, serialized)
+        .map_err(|err| anyhow!("Error writing configuration file: {}", err))?;
+
+    println!("Successfully generated default configuration at {:?}", path);
+    Ok(())
+}
+
+fn print_help() {
+    println!("Qst - An Application Launcher");
+    println!("Usage: qst [OPTIONS]");
+    println!();
+    println!("Options:");
+    println!("  --gen-config            Generate a default config file at ~/.config/qst/config.toml");
+    println!("                          (Fails if file already exists)");
+    println!("  -p, --program <name>    Launch a program directly using fuzzy matching");
+    println!("  -s, --script <script>   Open that script by default when qst starts");
+    println!("  --list-programs         Print all launchable programs");
+    println!("  --list-scripts          Print all scripts and their metadata");
+    println!("  -h, --help              Print this help message");
+}
+
+fn print_programs(app: &App) {
+    println!("Programs ({}):", app.entries.len());
+    for entry in &app.entries {
+        println!("- {} | {}", entry.name, entry.exec_args.join(" "));
+    }
+}
+
+fn print_scripts(app: &App) {
+    let scripts = app.script_listings();
+    println!("Scripts ({}):", scripts.len());
+
+    for script in scripts {
+        println!("- {} ({})", script.file_id, script.id);
+
+        if let Some(trigger) = &script.trigger {
+            println!("  Trigger: {}", trigger);
+        }
+
+        if let Some(metadata) = &script.metadata {
+            if let Some(name) = &metadata.name {
+                println!("  Name: {}", name);
+            }
+            if let Some(version) = &metadata.version {
+                println!("  Version: {}", version);
+            }
+            if let Some(author) = &metadata.author {
+                println!("  Author: {}", author);
+            }
+            if let Some(description) = &metadata.description {
+                println!("  Description: {}", description);
+            }
+        } else {
+            println!("  Metadata: unavailable");
+        }
+
+        println!();
+    }
 }
 
 fn matches_key(key: &event::KeyEvent, config_str: &str) -> bool {

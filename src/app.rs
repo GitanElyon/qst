@@ -99,12 +99,21 @@ pub struct ScriptItem {
 }
 
 #[derive(Debug, Clone)]
+pub struct ScriptListing {
+    pub id: String,
+    pub file_id: String,
+    pub trigger: Option<String>,
+    pub metadata: Option<ScriptMetadata>,
+}
+
+#[derive(Debug, Clone)]
 struct ScriptPlugin {
     id: String,
     file_id: String,
     path: PathBuf,
     trigger: Option<String>,
     interpreter: Option<&'static str>,
+    metadata: Option<ScriptMetadata>,
 }
 
 pub struct App {
@@ -184,6 +193,65 @@ impl App {
         app.sort_entries();
         app.filtered_entries = app.entries.clone();
         app
+    }
+
+    pub fn script_listings(&self) -> Vec<ScriptListing> {
+        self.scripts
+            .iter()
+            .map(|script| ScriptListing {
+                id: script.id.clone(),
+                file_id: script.file_id.clone(),
+                trigger: script.trigger.clone(),
+                metadata: script.metadata.clone(),
+            })
+            .collect()
+    }
+
+    pub fn launch_program_by_name(&mut self, program_name: &str) -> Result<(), String> {
+        let program_name = program_name.trim();
+        let Some(entry) = self
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                fuzzy_score(&program_name.to_lowercase(), &entry.name)
+                    .map(|score| (score, entry))
+            })
+            .max_by(|(score_a, entry_a), (score_b, entry_b)| {
+                score_a
+                    .cmp(score_b)
+                    .then_with(|| entry_a.name.to_lowercase().cmp(&entry_b.name.to_lowercase()))
+                    .then_with(|| entry_a.name.cmp(&entry_b.name))
+            })
+            .map(|(_, entry)| entry.clone())
+        else {
+            return Err(format!("No program found matching '{program_name}'"));
+        };
+
+        self.history.increment(&entry.name);
+
+        let Some((cmd, args)) = entry.exec_args.split_first() else {
+            return Err(format!("Program '{}' has no launch command", entry.name));
+        };
+
+        let launch_args = self.build_exec_args(args, None);
+        self.spawn_command(cmd, launch_args, &entry.name)
+    }
+
+    pub fn launch_script_mode(&mut self, script_name: &str) -> Result<(), String> {
+        let script_name = script_name.trim();
+        let Some(script) = self.find_script(script_name).cloned() else {
+            return Err(format!("No script found matching '{script_name}'"));
+        };
+
+        let query = script
+            .trigger
+            .clone()
+            .or_else(|| Some(script.file_id.clone()))
+            .unwrap_or_else(|| script.id.clone());
+
+        self.set_search_query(query);
+        self.update_filter();
+        Ok(())
     }
 
     fn char_count(input: &str) -> usize {
@@ -890,60 +958,65 @@ impl App {
             if let Some(entry) = app_entry {
                 self.history.increment(&entry.name);
                 if let Some((cmd, args)) = entry.exec_args.split_first() {
-                    let mut final_args = Vec::new();
-
-                    if self.config.features.enable_launch_args {
-                        if let Some(launch_args) = &self.launch_args {
-                            let mut current_launch_args = launch_args.clone();
-
-                            if self.mode == AppMode::FileSelection {
-                                if let Some(selected_file) = self.filtered_files.get(i) {
-                                    if let Some(last) = current_launch_args.last_mut() {
-                                        *last = selected_file.clone();
-                                    }
-                                }
-                            }
-
-                            let expanded_launch_args: Vec<String> = current_launch_args
-                                .iter()
-                                .map(|arg| self.expand_path(arg))
-                                .collect();
-
-                            let mut replaced = false;
-                            for arg in args {
-                                if ["%f", "%F", "%u", "%U"].contains(&arg.as_str()) {
-                                    final_args.extend(expanded_launch_args.clone());
-                                    replaced = true;
-                                } else {
-                                    final_args.push(arg.clone());
-                                }
-                            }
-
-                            if !replaced {
-                                final_args.extend(expanded_launch_args);
-                            }
-                        } else {
-                            for arg in args {
-                                if !["%f", "%F", "%u", "%U"].contains(&arg.as_str()) {
-                                    final_args.push(arg.clone());
-                                }
-                            }
-                        }
+                    let selected_file = if self.mode == AppMode::FileSelection {
+                        self.filtered_files.get(i).map(String::as_str)
                     } else {
-                        for arg in args {
-                            if !["%f", "%F", "%u", "%U"].contains(&arg.as_str()) {
-                                final_args.push(arg.clone());
-                            }
-                        }
-                    }
-
-                    self.spawn_command(cmd, final_args, &entry.name);
+                        None
+                    };
+                    let final_args = self.build_exec_args(args, selected_file);
+                    let _ = self.spawn_command(cmd, final_args, &entry.name);
                 }
             }
         }
     }
 
-    fn spawn_command(&mut self, cmd: &str, args: Vec<String>, entry_name: &str) {
+    fn build_exec_args(&self, args: &[String], selected_file: Option<&str>) -> Vec<String> {
+        let mut final_args = Vec::new();
+        let launch_placeholders = ["%f", "%F", "%u", "%U"];
+
+        if self.config.features.enable_launch_args {
+            if let Some(launch_args) = &self.launch_args {
+                let mut current_launch_args = launch_args.clone();
+
+                if let Some(selected_file) = selected_file {
+                    if let Some(last) = current_launch_args.last_mut() {
+                        *last = selected_file.to_string();
+                    }
+                }
+
+                let expanded_launch_args: Vec<String> = current_launch_args
+                    .iter()
+                    .map(|arg| self.expand_path(arg))
+                    .collect();
+
+                let mut replaced = false;
+                for arg in args {
+                    if launch_placeholders.contains(&arg.as_str()) {
+                        final_args.extend(expanded_launch_args.clone());
+                        replaced = true;
+                    } else {
+                        final_args.push(arg.clone());
+                    }
+                }
+
+                if !replaced {
+                    final_args.extend(expanded_launch_args);
+                }
+
+                return final_args;
+            }
+        }
+
+        for arg in args {
+            if !launch_placeholders.contains(&arg.as_str()) {
+                final_args.push(arg.clone());
+            }
+        }
+
+        final_args
+    }
+
+    fn spawn_command(&mut self, cmd: &str, args: Vec<String>, entry_name: &str) -> Result<(), String> {
         let mut command = Command::new(cmd);
         command
             .args(args)
@@ -963,10 +1036,12 @@ impl App {
             Ok(_) => {
                 self.should_quit = true;
                 self.status_message = None;
+                Ok(())
             }
             Err(err) => {
                 self.status_message =
                     Some(format!("Failed to launch {}: {}", entry_name, err));
+                Err(err.to_string())
             }
         }
     }
@@ -1142,6 +1217,17 @@ impl App {
         normalized.to_string()
     }
 
+    fn read_script_metadata_from_source(path: &Path) -> Option<ScriptMetadata> {
+        let contents = fs::read_to_string(path).ok()?;
+
+        contents.lines().find_map(|line| {
+            let line = line.trim_start();
+            let metadata_line = line.strip_prefix("echo \"qst! meta ")?;
+            let metadata_line = metadata_line.strip_suffix('"').unwrap_or(metadata_line);
+            Self::parse_script_metadata(metadata_line)
+        })
+    }
+
     fn load_scripts(aliases: &mut HashMap<String, String>) -> Vec<ScriptPlugin> {
         let mut scripts = Vec::new();
         
@@ -1186,6 +1272,7 @@ impl App {
                 .unwrap_or(stem)
                 .to_string();
             let trigger = aliases.remove(stem).or_else(|| aliases.remove(&file_id));
+            let metadata = Self::read_script_metadata_from_source(&path);
 
             scripts.push(ScriptPlugin {
                 id,
@@ -1193,6 +1280,7 @@ impl App {
                 path,
                 trigger,
                 interpreter,
+                metadata,
             });
         }
 
@@ -1368,6 +1456,27 @@ impl App {
         }
 
         true
+    }
+
+    fn find_script(&self, selector: &str) -> Option<&ScriptPlugin> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return None;
+        }
+
+        self.scripts.iter().find(|script| {
+            script.id.eq_ignore_ascii_case(selector)
+                || script.file_id.eq_ignore_ascii_case(selector)
+                || script
+                    .trigger
+                    .as_deref()
+                    .is_some_and(|trigger| trigger.eq_ignore_ascii_case(selector))
+                || script
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.name.as_deref())
+                    .is_some_and(|name| name.eq_ignore_ascii_case(selector))
+        })
     }
 
     fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
@@ -2130,6 +2239,7 @@ mod tests {
             path: script_path,
             trigger: None,
             interpreter: None,
+            metadata: None,
         };
 
         let err = app
@@ -2144,6 +2254,27 @@ mod tests {
         assert!(App::script_storage_path("sample", "/tmp/data").is_none());
         assert!(App::script_storage_path("sample", "../data").is_none());
         assert!(App::script_storage_path("sample", "nested/data").is_some());
+    }
+
+    #[test]
+    fn read_script_metadata_from_source_parses_header() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("meta.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\necho \"qst! meta Sample Name, 1.2.3, Tester, Describes the script\"\n",
+        )
+        .unwrap();
+
+        let metadata = App::read_script_metadata_from_source(&script_path).expect("metadata should be parsed");
+
+        assert_eq!(metadata.name.as_deref(), Some("Sample Name"));
+        assert_eq!(metadata.version.as_deref(), Some("1.2.3"));
+        assert_eq!(metadata.author.as_deref(), Some("Tester"));
+        assert_eq!(metadata.description.as_deref(), Some("Describes the script"));
     }
 }
 

@@ -50,6 +50,17 @@ Either run qst from the terminal:
 qst
 ```
 
+You can also use launch-time flags:
+
+```bash
+qst --program firefox
+qst --script runner
+qst --list-programs
+qst --list-scripts
+```
+
+`-p, --program` launches a desktop program directly using qst's fuzzy matching. `-s, --script` opens that script by default when qst starts. The list flags print the available programs or scripts, including script metadata parsed from the script source header.
+
 Or bind to a global hotkey (e.g. `Super+Space`) using your desktop environment's keyboard settings.
 
 Example for hyperland users to mimic `rofi`:
