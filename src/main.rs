@@ -12,6 +12,7 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use dirs::config_dir;
+use crate::history::History;
 use std::fs;
 use std::io;
 use std::env;
@@ -23,6 +24,8 @@ enum CliAction {
     Help,
     ListPrograms,
     ListScripts,
+    ClearHistory,
+    ClearFavorites,
     LaunchProgram(String),
     LaunchScript(String),
 }
@@ -31,6 +34,7 @@ struct CliOptions {
     config_path: Option<PathBuf>,
     prefill: Option<String>,
     shy: bool,
+    no_fuzzy: bool,
     action: CliAction,
 }
 
@@ -46,6 +50,18 @@ fn main() -> Result<()> {
             generate_default_config(options.config_path.as_deref())?;
             return Ok(());
         }
+        CliAction::ClearHistory => {
+            let mut history = History::load();
+            history.clear_history();
+            println!("Cleared qst history.");
+            return Ok(());
+        }
+        CliAction::ClearFavorites => {
+            let mut history = History::load();
+            history.clear_favorites();
+            println!("Cleared qst favorite apps.");
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -56,6 +72,7 @@ fn main() -> Result<()> {
 
     let mut app = App::new(load_result.config, load_result.warning);
     app.hide_entries_until_typing = options.shy;
+    app.fuzzy_matching_enabled = !options.no_fuzzy;
 
     if let Some(prefill) = options.prefill {
         app.set_search_query(prefill);
@@ -83,7 +100,7 @@ fn main() -> Result<()> {
             app.launch_script_mode(&script_name)
                 .map_err(anyhow::Error::msg)?;
         }
-        CliAction::Help | CliAction::GenerateConfig => unreachable!(),
+        CliAction::Help | CliAction::GenerateConfig | CliAction::ClearHistory | CliAction::ClearFavorites => unreachable!(),
     }
 
     enable_raw_mode()?;
@@ -139,6 +156,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
     let mut config_path = None;
     let mut prefill = None;
     let mut shy = false;
+    let mut no_fuzzy = false;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -156,10 +174,13 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
                 prefill = Some(value);
             }
             "--shy" => shy = true,
+            "--no-fuzzy" => no_fuzzy = true,
             "--gen-config" => set_cli_action(&mut action, CliAction::GenerateConfig)?,
             "-h" | "--help" => set_cli_action(&mut action, CliAction::Help)?,
             "--list-programs" => set_cli_action(&mut action, CliAction::ListPrograms)?,
             "--list-scripts" => set_cli_action(&mut action, CliAction::ListScripts)?,
+            "--clear-history" => set_cli_action(&mut action, CliAction::ClearHistory)?,
+            "--clear-favorites" => set_cli_action(&mut action, CliAction::ClearFavorites)?,
             "-p" | "--program" => {
                 let Some(program_name) = args.next() else {
                     return Err(anyhow!("--program requires a program name"));
@@ -180,6 +201,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
         config_path,
         prefill,
         shy,
+        no_fuzzy,
         action: action.unwrap_or(CliAction::Interactive),
     })
 }
@@ -239,8 +261,11 @@ fn print_help() {
     println!("  --config <path>         Use a config file from a custom path");
     println!("  --gen-config            Generate a default config file at ~/.config/qst/config.toml");
     println!("                          (Fails if file already exists)");
+    println!("  --clear-history         Clear qst's app history");
+    println!("  --clear-favorites       Clear qst's favorite apps");
     println!("  --prefill <string>      Launch qst with an initial search string");
     println!("  --shy                   Hide entries until you start typing");
+    println!("  --no-fuzzy              Launch without fuzzy finding");
     println!("  -p, --program <name>    Launch a program directly using fuzzy matching");
     println!("  -s, --script <script>   Open that script by default when qst starts");
     println!("  --list-programs         Print all launchable programs");

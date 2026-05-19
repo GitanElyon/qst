@@ -56,6 +56,16 @@ impl History {
         self.save();
     }
 
+    pub fn clear_history(&mut self) {
+        self.usage.clear();
+        self.save();
+    }
+
+    pub fn clear_favorites(&mut self) {
+        self.favorites.clear();
+        self.save();
+    }
+
     pub fn is_favorite(&self, app_name: &str) -> bool {
         self.favorites.contains(&app_name.to_string())
     }

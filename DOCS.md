@@ -32,6 +32,12 @@ qst also supports launch-time flags:
   - Launch qst with an initial search string.
 - `--shy`
   - Hide entries until you start typing.
+- `--no-fuzzy`
+  - Disable fuzzy finding in the launcher.
+- `--clear-history`
+  - Clear qst's app history.
+- `--clear-favorites`
+  - Clear qst's favorite apps.
 - `-p, --program <name>`
   - Launch a program directly using fuzzy matching and exit without opening the UI.
 - `-s, --script <script>`

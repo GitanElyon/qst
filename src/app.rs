@@ -134,6 +134,7 @@ pub struct App {
     pub script_items: Vec<ScriptItem>,
     pub qst_ascii: String,
     pub hide_entries_until_typing: bool,
+    pub fuzzy_matching_enabled: bool,
     scripts: Vec<ScriptPlugin>,
 }
 
@@ -189,6 +190,7 @@ impl App {
             script_items: Vec::new(),
             qst_ascii,
             hide_entries_until_typing: false,
+            fuzzy_matching_enabled: true,
             scripts,
         };
 
@@ -216,7 +218,7 @@ impl App {
             .entries
             .iter()
             .filter_map(|entry| {
-                fuzzy_score(&query, &entry.name)
+                Self::search_score(&query, &entry.name, self.fuzzy_matching_enabled)
                     .map(|score| (score, entry))
             })
             .max_by(|(score_a, entry_a), (score_b, entry_b)| {
@@ -614,6 +616,7 @@ impl App {
         items: Vec<ScriptItem>,
         query: &str,
         script_fuzzy: bool,
+        fuzzy_matching_enabled: bool,
     ) -> Vec<ScriptItem> {
         if query.trim().is_empty() {
             return items;
@@ -623,9 +626,9 @@ impl App {
         let mut passthrough_items: Vec<(usize, ScriptItem)> = Vec::new();
 
         for (index, item) in items.into_iter().enumerate() {
-            let fuzzy_enabled = script_fuzzy || item.meta.fuzzy;
+            let fuzzy_enabled = fuzzy_matching_enabled && (script_fuzzy || item.meta.fuzzy);
             if fuzzy_enabled {
-                if let Some(score) = fuzzy_score(query, &Self::script_item_search_text(&item)) {
+                if let Some(score) = Self::search_score(query, &Self::script_item_search_text(&item), true) {
                     fuzzy_matches.push((score, index, item));
                 }
             } else {
@@ -757,7 +760,7 @@ impl App {
                 .entries
                 .iter()
                 .filter_map(|e| {
-                    fuzzy_score(&query, &e.name).map(|score| (score, e.clone()))
+                    Self::search_score(&query, &e.name, self.fuzzy_matching_enabled).map(|score| (score, e.clone()))
                 })
                 .collect();
 
@@ -779,7 +782,8 @@ impl App {
                         .entries
                         .iter()
                         .filter_map(|e| {
-                            fuzzy_score(&sub_query_lower, &e.name).map(|score| (score, e.clone()))
+                            Self::search_score(&sub_query_lower, &e.name, self.fuzzy_matching_enabled)
+                                .map(|score| (score, e.clone()))
                         })
                         .collect();
 
@@ -1486,6 +1490,25 @@ impl App {
         })
     }
 
+            fn search_score(query: &str, target: &str, fuzzy_matching_enabled: bool) -> Option<i64> {
+                let query = query.trim();
+                if query.is_empty() {
+                    return Some(0);
+                }
+
+                if fuzzy_matching_enabled {
+                    return fuzzy_score(query, target);
+                }
+
+                let query_lower = query.to_lowercase();
+                let target_lower = target.to_lowercase();
+                if target_lower.contains(&query_lower) {
+                    Some((query_lower.len() as i64).saturating_mul(10) - target_lower.len() as i64)
+                } else {
+                    None
+                }
+            }
+
     fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
         self.run_script_with_timeout(script, payload, Self::SCRIPT_TIMEOUT)
     }
@@ -1551,7 +1574,7 @@ impl App {
         }
 
         let stdout = String::from_utf8_lossy(&stdout);
-        Ok(Self::parse_script_output(&stdout, payload, &script.id))
+        Ok(Self::parse_script_output(&stdout, payload, &script.id, self.fuzzy_matching_enabled))
     }
 
     fn read_pipe<R>(mut pipe: R) -> Vec<u8>
@@ -1581,6 +1604,7 @@ impl App {
         output: &str,
         query: &str,
         script_id: &str,
+        fuzzy_matching_enabled: bool,
     ) -> (Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>) {
         let mut title: Option<String> = None;
         let mut message: Option<String> = None;
@@ -1774,7 +1798,7 @@ impl App {
             });
         }
 
-        let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy);
+        let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy, fuzzy_matching_enabled);
         let mut items = items;
         items.sort_by(|a, b| b.meta.urgent.cmp(&a.meta.urgent));
 
@@ -2090,6 +2114,7 @@ mod tests {
             script_items: Vec::new(),
             qst_ascii: String::new(),
             hide_entries_until_typing: false,
+            fuzzy_matching_enabled: true,
             scripts: Vec::new(),
         }
     }
@@ -2146,7 +2171,7 @@ mod tests {
             meta: ScriptRowMeta::default(),
         };
 
-        let filtered = App::fuzzy_filter_script_items(vec![plain_item.clone(), fuzzy_item.clone()], "clb", false);
+        let filtered = App::fuzzy_filter_script_items(vec![plain_item.clone(), fuzzy_item.clone()], "clb", false, true);
 
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].title, fuzzy_item.title);
@@ -2175,7 +2200,7 @@ mod tests {
     fn parse_script_output_parses_script_metadata_header() {
         let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! title My Awesome script\n";
 
-        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample", true);
 
         assert_eq!(title.as_deref(), Some(" My Awesome script "));
         assert!(message.is_none());
@@ -2192,7 +2217,7 @@ mod tests {
     fn parse_script_output_supports_script_metadata_field_selection() {
         let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! meta author\n";
 
-        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample", true);
 
         assert_eq!(title.as_deref(), Some(" My Awesome script "));
         assert_eq!(message.as_deref(), Some("John Doe"));
