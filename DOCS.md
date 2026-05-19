@@ -26,6 +26,12 @@ Script integration uses:
 
 qst also supports launch-time flags:
 
+- `--config <path>`
+  - Use a config file from a custom path.
+- `--prefill <string>`
+  - Launch qst with an initial search string.
+- `--shy`
+  - Hide entries until you start typing.
 - `-p, --program <name>`
   - Launch a program directly using fuzzy matching and exit without opening the UI.
 - `-s, --script <script>`
@@ -35,7 +41,7 @@ qst also supports launch-time flags:
 - `--list-scripts`
   - Print all scripts and their metadata.
 - `--gen-config`
-  - Generate `~/.config/qst/config.toml`.
+  - Generate `~/.config/qst/config.toml` or the file given by `--config`.
 - `-h, --help`
   - Print the CLI help text.
 

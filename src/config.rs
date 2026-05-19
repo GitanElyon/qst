@@ -6,6 +6,7 @@ use ratatui::{
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 pub struct ConfigLoadResult {
     pub config: AppConfig,
@@ -30,61 +31,75 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn load() -> ConfigLoadResult {
+    pub fn load(config_path: Option<&Path>) -> ConfigLoadResult {
         let default = Self::default();
         let mut warning = None;
-        let config = match config_dir() {
-            Some(mut dir) => {
-                dir.push("qst");
-                if fs::create_dir_all(&dir).is_err() {
-                    warning = Some("Unable to create ~/.config/qst, using defaults".into());
-                    default
-                } else {
-                    let config_path = dir.join("config.toml");
-                    if config_path.exists() {
-                        match fs::read_to_string(&config_path) {
-                            Ok(contents) => match toml::from_str::<AppConfig>(&contents) {
-                                Ok(parsed) => {
-                                    let validation_warnings = parsed.validation_warnings();
-                                    if !validation_warnings.is_empty() {
-                                        let validation_warning = validation_warnings.join("\n");
-                                        warning = Some(match warning.take() {
-                                            Some(existing) => format!("{existing}\n{validation_warning}"),
-                                            None => validation_warning,
-                                        });
-                                    }
-                                    parsed
-                                }
-                                Err(err) => {
-                                    warning = Some(format!(
-                                        "Invalid config ({}). Falling back to defaults.",
-                                        err
-                                    ));
-                                    default
-                                }
-                            },
-                            Err(err) => {
-                                warning = Some(format!(
-                                    "Failed to read config ({}). Using defaults.",
-                                    err
-                                ));
-                                default
-                            }
+        let Some(config_path) = Self::resolve_config_path(config_path) else {
+            warning = Some("Could not locate configuration directory. Using defaults.".into());
+            return ConfigLoadResult { config: default, warning };
+        };
+
+        if let Some(parent) = config_path.parent() {
+            if !parent.as_os_str().is_empty() && fs::create_dir_all(parent).is_err() {
+                warning = Some(match config_path == Self::default_config_path().unwrap_or_default() {
+                    true => "Unable to create ~/.config/qst, using defaults".into(),
+                    false => format!("Unable to create configuration directory: {:?}", parent),
+                });
+                return ConfigLoadResult { config: default, warning };
+            }
+        }
+
+        let config = if config_path.exists() {
+            match fs::read_to_string(&config_path) {
+                Ok(contents) => match toml::from_str::<AppConfig>(&contents) {
+                    Ok(parsed) => {
+                        let validation_warnings = parsed.validation_warnings();
+                        if !validation_warnings.is_empty() {
+                            let validation_warning = validation_warnings.join("\n");
+                            warning = Some(match warning.take() {
+                                Some(existing) => format!("{existing}\n{validation_warning}"),
+                                None => validation_warning,
+                            });
                         }
-                    } else {
-                        if let Ok(serialized) = toml::to_string_pretty(&default) {
-                            let _ = fs::write(&config_path, serialized);
-                        }
+                        parsed
+                    }
+                    Err(err) => {
+                        warning = Some(format!(
+                            "Invalid config ({}). Falling back to defaults.",
+                            err
+                        ));
                         default
                     }
+                },
+                Err(err) => {
+                    warning = Some(format!(
+                        "Failed to read config ({}). Using defaults.",
+                        err
+                    ));
+                    default
                 }
             }
-            None => {
-                warning = Some("Could not locate configuration directory. Using defaults.".into());
-                default
+        } else {
+            if let Ok(serialized) = toml::to_string_pretty(&default) {
+                let _ = fs::write(&config_path, serialized);
             }
+            default
         };
         ConfigLoadResult { config, warning }
+    }
+
+    fn resolve_config_path(config_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(config_path) = config_path {
+            return Some(config_path.to_path_buf());
+        }
+
+        let mut dir = config_dir()?;
+        dir.push("qst");
+        Some(dir.join("config.toml"))
+    }
+
+    fn default_config_path() -> Option<PathBuf> {
+        Self::resolve_config_path(None)
     }
 
     pub fn validation_warnings(&self) -> Vec<String> {

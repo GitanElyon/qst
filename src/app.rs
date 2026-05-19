@@ -133,6 +133,7 @@ pub struct App {
     pub script_meta: Option<ScriptMetadata>,
     pub script_items: Vec<ScriptItem>,
     pub qst_ascii: String,
+    pub hide_entries_until_typing: bool,
     scripts: Vec<ScriptPlugin>,
 }
 
@@ -187,6 +188,7 @@ impl App {
             script_meta: None,
             script_items: Vec::new(),
             qst_ascii,
+            hide_entries_until_typing: false,
             scripts,
         };
 
@@ -209,11 +211,12 @@ impl App {
 
     pub fn launch_program_by_name(&mut self, program_name: &str) -> Result<(), String> {
         let program_name = program_name.trim();
+        let query = program_name.to_lowercase();
         let Some(entry) = self
             .entries
             .iter()
             .filter_map(|entry| {
-                fuzzy_score(&program_name.to_lowercase(), &entry.name)
+                fuzzy_score(&query, &entry.name)
                     .map(|score| (score, entry))
             })
             .max_by(|(score_a, entry_a), (score_b, entry_b)| {
@@ -743,7 +746,11 @@ impl App {
         }
 
         if self.mode != AppMode::FileSelection && query_slice.is_empty() {
-            self.filtered_entries = self.entries.clone();
+            if self.hide_entries_until_typing {
+                self.filtered_entries = Vec::new();
+            } else {
+                self.filtered_entries = self.entries.clone();
+            }
         } else if self.mode != AppMode::FileSelection {
             let query = query_slice.to_lowercase();
             let mut matches: Vec<(i64, AppEntry)> = self
@@ -2082,6 +2089,7 @@ mod tests {
             script_meta: None,
             script_items: Vec::new(),
             qst_ascii: String::new(),
+            hide_entries_until_typing: false,
             scripts: Vec::new(),
         }
     }

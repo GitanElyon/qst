@@ -15,6 +15,7 @@ use dirs::config_dir;
 use std::fs;
 use std::io;
 use std::env;
+use std::path::{Path, PathBuf};
 
 enum CliAction {
     Interactive,
@@ -26,29 +27,44 @@ enum CliAction {
     LaunchScript(String),
 }
 
-fn main() -> Result<()> {
-    let action = parse_cli_action(env::args().skip(1))?;
+struct CliOptions {
+    config_path: Option<PathBuf>,
+    prefill: Option<String>,
+    shy: bool,
+    action: CliAction,
+}
 
-    match action {
+fn main() -> Result<()> {
+    let options = parse_cli_options(env::args().skip(1))?;
+
+    match options.action {
         CliAction::Help => {
             print_help();
             return Ok(());
         }
         CliAction::GenerateConfig => {
-            generate_default_config()?;
+            generate_default_config(options.config_path.as_deref())?;
             return Ok(());
         }
         _ => {}
     }
 
-    let load_result = AppConfig::load();
+    let load_result = AppConfig::load(options.config_path.as_deref());
     if let Some(warning) = &load_result.warning {
         eprintln!("{warning}");
     }
 
     let mut app = App::new(load_result.config, load_result.warning);
+    app.hide_entries_until_typing = options.shy;
 
-    match action {
+    if let Some(prefill) = options.prefill {
+        app.set_search_query(prefill);
+        app.update_filter();
+    } else {
+        app.update_filter();
+    }
+
+    match options.action {
         CliAction::Interactive => {}
         CliAction::ListPrograms => {
             print_programs(&app);
@@ -118,12 +134,28 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn parse_cli_action(args: impl IntoIterator<Item = String>) -> Result<CliAction> {
+fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOptions> {
     let mut action = None;
+    let mut config_path = None;
+    let mut prefill = None;
+    let mut shy = false;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--config" => {
+                let Some(path) = args.next() else {
+                    return Err(anyhow!("--config requires a file path"));
+                };
+                config_path = Some(PathBuf::from(path));
+            }
+            "--prefill" => {
+                let Some(value) = args.next() else {
+                    return Err(anyhow!("--prefill requires a string value"));
+                };
+                prefill = Some(value);
+            }
+            "--shy" => shy = true,
             "--gen-config" => set_cli_action(&mut action, CliAction::GenerateConfig)?,
             "-h" | "--help" => set_cli_action(&mut action, CliAction::Help)?,
             "--list-programs" => set_cli_action(&mut action, CliAction::ListPrograms)?,
@@ -144,7 +176,12 @@ fn parse_cli_action(args: impl IntoIterator<Item = String>) -> Result<CliAction>
         }
     }
 
-    Ok(action.unwrap_or(CliAction::Interactive))
+    Ok(CliOptions {
+        config_path,
+        prefill,
+        shy,
+        action: action.unwrap_or(CliAction::Interactive),
+    })
 }
 
 fn set_cli_action(action: &mut Option<CliAction>, next: CliAction) -> Result<()> {
@@ -156,16 +193,14 @@ fn set_cli_action(action: &mut Option<CliAction>, next: CliAction) -> Result<()>
     Ok(())
 }
 
-fn generate_default_config() -> Result<()> {
-    let Some(mut path) = config_dir() else {
-        return Err(anyhow!("Could not determine configuration directory"));
-    };
+fn generate_default_config(config_path: Option<&Path>) -> Result<()> {
+    let path = resolve_config_path(config_path)?;
 
-    path.push("qst");
-    if fs::create_dir_all(&path).is_err() {
-        return Err(anyhow!("Unable to create configuration directory: {:?}", path));
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && fs::create_dir_all(parent).is_err() {
+            return Err(anyhow!("Unable to create configuration directory: {:?}", parent));
+        }
     }
-    path.push("config.toml");
 
     if path.exists() {
         return Err(anyhow!("Configuration file already exists at {:?}", path));
@@ -182,13 +217,30 @@ fn generate_default_config() -> Result<()> {
     Ok(())
 }
 
+fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
+    if let Some(config_path) = config_path {
+        return Ok(config_path.to_path_buf());
+    }
+
+    let Some(mut path) = config_dir() else {
+        return Err(anyhow!("Could not determine configuration directory"));
+    };
+
+    path.push("qst");
+    path.push("config.toml");
+    Ok(path)
+}
+
 fn print_help() {
     println!("Qst - An Application Launcher");
     println!("Usage: qst [OPTIONS]");
     println!();
     println!("Options:");
+    println!("  --config <path>         Use a config file from a custom path");
     println!("  --gen-config            Generate a default config file at ~/.config/qst/config.toml");
     println!("                          (Fails if file already exists)");
+    println!("  --prefill <string>      Launch qst with an initial search string");
+    println!("  --shy                   Hide entries until you start typing");
     println!("  -p, --program <name>    Launch a program directly using fuzzy matching");
     println!("  -s, --script <script>   Open that script by default when qst starts");
     println!("  --list-programs         Print all launchable programs");
