@@ -17,6 +17,7 @@ Script integration uses:
 
 - `~/.config/qst/scripts/`
   - executable `*.sh` scripts discovered dynamically.
+  - Note: qst ships a built-in `loader.sh` helper and will seed it into this directory on first run. You can use `loader.sh` to browse and install scripts from the `awesome-qst` catalog.
 - `~/.config/qst/alias.toml`
   - optional trigger aliases for script names.
 

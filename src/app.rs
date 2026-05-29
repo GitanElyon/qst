@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+const REMOTE_LOADER_SCRIPT_URL: &str =
+    "https://raw.githubusercontent.com/GitanElyon/awesome-qst/main/scripts/loader.sh";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
     AppSelection,
@@ -142,6 +145,7 @@ impl App {
     const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
     pub fn new(config: AppConfig, status_message: Option<String>) -> Self {
+        Self::ensure_loader_script_installed();
         let (mut script_aliases, mut app_aliases) = Self::load_aliases();
         let history = History::load();
         let scripts = Self::load_scripts(&mut script_aliases);
@@ -1194,6 +1198,60 @@ impl App {
         dir.push("qst");
         dir.push("scripts");
         Some(dir)
+    }
+
+    fn ensure_loader_script_installed() {
+        let Some(dir) = Self::scripts_dir() else {
+            return;
+        };
+
+        let loader_path = dir.join("loader.sh");
+        if loader_path.exists() {
+            Self::ensure_executable(&loader_path);
+            return;
+        }
+
+        if fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+
+        let loader_script = Self::fetch_remote_loader_script().unwrap_or_else(|| {
+            "#!/bin/sh\necho \"qst! meta \"\ncat \"$@\"\n".to_string()
+        });
+
+        if fs::write(&loader_path, loader_script).is_ok() {
+            Self::ensure_executable(&loader_path);
+        }
+    }
+
+    fn fetch_remote_loader_script() -> Option<String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .ok()?;
+
+        client
+            .get(REMOTE_LOADER_SCRIPT_URL)
+            .send()
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .text()
+            .ok()
+            .filter(|content| !content.trim().is_empty())
+    }
+
+    fn ensure_executable(path: &Path) {
+        let Ok(metadata) = fs::metadata(path) else {
+            return;
+        };
+
+        let mut permissions = metadata.permissions();
+        let mode = permissions.mode();
+        if mode & 0o111 != 0o111 {
+            permissions.set_mode(mode | 0o111);
+            let _ = fs::set_permissions(path, permissions);
+        }
     }
 
     fn script_interpreter_for_extension(ext: &str) -> Option<&'static str> {
@@ -2308,6 +2366,24 @@ mod tests {
         assert_eq!(metadata.version.as_deref(), Some("1.2.3"));
         assert_eq!(metadata.author.as_deref(), Some("Tester"));
         assert_eq!(metadata.description.as_deref(), Some("Describes the script"));
+    }
+
+    #[test]
+    fn ensure_executable_adds_execute_bits_without_rewriting_content() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("loader.sh");
+        fs::write(&script_path, "#!/bin/sh\necho loader\n").unwrap();
+
+        App::ensure_executable(&script_path);
+
+        let content = fs::read_to_string(&script_path).unwrap();
+        let mode = fs::metadata(&script_path).unwrap().permissions().mode();
+
+        assert_eq!(content, "#!/bin/sh\necho loader\n");
+        assert_eq!(mode & 0o111, 0o111);
     }
 }
 

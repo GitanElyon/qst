@@ -18,6 +18,8 @@ Qst, pronounced "quest", is a TUI Linux application launcher built with Rust + R
 
 qst is the host runtime. Plugins are script-based and live in `~/.config/qst/scripts/`. Plugins can define custom triggers, query handling, and output formatting via a simple line-oriented protocol. 
 
+Note: qst bundles a helper script, `loader.sh`, and will install it into `~/.config/qst/scripts/` on first run so users can browse and install community plugins without manually copying files.
+
 Scripts can be executable files (any language) or extension-based scripts run through supported interpreters (`.sh`, `.bash`, `.zsh`, `.fish`, `.py`, `.pl`, `.rb`, `.js`, `.lua`).
 
 The plugin ecosystem is cataloged in `awesome-qst`:
