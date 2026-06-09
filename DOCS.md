@@ -51,6 +51,8 @@ qst also supports launch-time flags:
   - Generate `~/.config/qst/config.toml` or the file given by `--config`.
 - `-h, --help`
   - Print the CLI help text.
+-  `-v, --version`
+  - Print the qst version.
 
 `--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
 

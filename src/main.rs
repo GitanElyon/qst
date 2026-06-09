@@ -22,6 +22,7 @@ enum CliAction {
     Interactive,
     GenerateConfig,
     Help,
+    Version,
     ListPrograms,
     ListScripts,
     ClearHistory,
@@ -44,6 +45,10 @@ fn main() -> Result<()> {
     match options.action {
         CliAction::Help => {
             print_help();
+            return Ok(());
+        }
+        CliAction::Version => {
+            println!("qst {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         CliAction::GenerateConfig => {
@@ -100,7 +105,7 @@ fn main() -> Result<()> {
             app.launch_script_mode(&script_name)
                 .map_err(anyhow::Error::msg)?;
         }
-        CliAction::Help | CliAction::GenerateConfig | CliAction::ClearHistory | CliAction::ClearFavorites => unreachable!(),
+        CliAction::Help | CliAction::Version | CliAction::GenerateConfig | CliAction::ClearHistory | CliAction::ClearFavorites => unreachable!(),
     }
 
     enable_raw_mode()?;
@@ -177,6 +182,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
             "--no-fuzzy" => no_fuzzy = true,
             "--gen-config" => set_cli_action(&mut action, CliAction::GenerateConfig)?,
             "-h" | "--help" => set_cli_action(&mut action, CliAction::Help)?,
+            "-v" | "--version" => set_cli_action(&mut action, CliAction::Version)?,
             "--list-programs" => set_cli_action(&mut action, CliAction::ListPrograms)?,
             "--list-scripts" => set_cli_action(&mut action, CliAction::ListScripts)?,
             "--clear-history" => set_cli_action(&mut action, CliAction::ClearHistory)?,
@@ -270,6 +276,7 @@ fn print_help() {
     println!("  -s, --script <script>   Open that script by default when qst starts");
     println!("  --list-programs         Print all launchable programs");
     println!("  --list-scripts          Print all scripts and their metadata");
+    println!("  -v, --version           Print version information");
     println!("  -h, --help              Print this help message");
 }
 
