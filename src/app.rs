@@ -1967,6 +1967,9 @@ impl App {
                     true
                 }
                 ScriptAction::RefreshResults => {
+                    if let Some(mut child) = pending_execute.take() {
+                        let _ = child.wait();
+                    }
                     self.update_filter();
                     true
                 }
