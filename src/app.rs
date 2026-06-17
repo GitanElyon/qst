@@ -3,13 +3,17 @@ use crate::history::History;
 use dirs::config_dir;
 use freedesktop_desktop_entry::{Iter, default_paths, get_languages_from_env};
 use ratatui::widgets::ListState;
+use rustls::{ClientConfig, ClientConnection, Stream};
+use rustls_graviola;
 use std::{
     collections::HashMap,
     fs,
-    io::{self, Read},
+    io::{self, Read, Write},
+    net::{TcpStream, ToSocketAddrs},
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -1225,20 +1229,49 @@ impl App {
     }
 
     fn fetch_remote_loader_script() -> Option<String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
+        rustls_graviola::default_provider()
+            .install_default()
             .ok()?;
 
-        client
-            .get(REMOTE_LOADER_SCRIPT_URL)
-            .send()
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .text()
-            .ok()
-            .filter(|content| !content.trim().is_empty())
+        let url = REMOTE_LOADER_SCRIPT_URL.strip_prefix("https://")?;
+        let (host, rest) = url.split_once('/')?;
+        let path = format!("/{rest}");
+
+        let addr = (host, 443).to_socket_addrs().ok()?.next()?;
+        let mut tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        );
+
+        let server_name = rustls::pki_types::ServerName::try_from(host).ok()?;
+        let mut tls_conn = ClientConnection::new(config, server_name).ok()?;
+        let mut tls_stream = Stream::new(&mut tls_conn, &mut tcp);
+
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        );
+        tls_stream.write_all(request.as_bytes()).ok()?;
+        tls_stream.flush().ok()?;
+
+        let mut response = Vec::new();
+        tls_stream.read_to_end(&mut response).ok()?;
+        let response = String::from_utf8(response).ok()?;
+
+        let status = response.lines().next()?;
+        let code = status.split_whitespace().nth(1)?;
+        if !code.starts_with('2') {
+            return None;
+        }
+
+        let body = response.split("\r\n\r\n").nth(1)?;
+        let body = body.trim().to_string();
+        if body.is_empty() { None } else { Some(body) }
     }
 
     fn ensure_executable(path: &Path) {

@@ -24,6 +24,8 @@ arboard = "3.2"
 libloading = "0.8"
 meval = "0.2.0"
 quadrature = "0.1.2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-graviola = "0.3"
+webpki-roots = "1"
 
 [package.metadata.nix]
