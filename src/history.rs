@@ -56,7 +56,60 @@ impl History {
         self.save();
     }
 
+    pub fn clear_history(&mut self) {
+        self.usage.clear();
+        self.save();
+    }
+
+    pub fn clear_favorites(&mut self) {
+        self.favorites.clear();
+        self.save();
+    }
+
     pub fn is_favorite(&self, app_name: &str) -> bool {
         self.favorites.contains(&app_name.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_updates_usage_and_favorites_in_memory() {
+        let mut history = History::default();
+
+        assert_eq!(history.get_count("Terminal"), 0);
+        assert!(!history.is_favorite("Terminal"));
+
+        history.increment("Terminal");
+        history.increment("Terminal");
+        assert_eq!(history.get_count("Terminal"), 2);
+
+        history.toggle_favorite("Terminal");
+        assert!(history.is_favorite("Terminal"));
+
+        history.toggle_favorite("Terminal");
+        assert!(!history.is_favorite("Terminal"));
+    }
+
+    #[test]
+    fn history_toml_roundtrip_preserves_usage_and_favorites() {
+        let mut usage = HashMap::new();
+        usage.insert("Terminal".to_string(), 3);
+        usage.insert("Editor".to_string(), 1);
+
+        let history = History {
+            usage,
+            favorites: vec!["Editor".to_string()],
+        };
+
+        let content = toml::to_string(&history).expect("history should serialize");
+        let loaded: History = toml::from_str(&content).expect("history should deserialize");
+
+        assert_eq!(loaded.get_count("Terminal"), 3);
+        assert_eq!(loaded.get_count("Editor"), 1);
+        assert!(loaded.is_favorite("Editor"));
+        assert!(!loaded.is_favorite("Terminal"));
     }
 }

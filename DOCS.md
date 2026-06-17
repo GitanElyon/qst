@@ -17,10 +17,44 @@ Script integration uses:
 
 - `~/.config/qst/scripts/`
   - executable `*.sh` scripts discovered dynamically.
+  - Note: qst ships a built-in `loader.sh` helper and will seed it into this directory on first run. You can use `loader.sh` to browse and install scripts from the `awesome-qst` catalog.
 - `~/.config/qst/alias.toml`
   - optional trigger aliases for script names.
 
 `config.toml` is created automatically on first run.
+
+## Command-line options
+
+qst also supports launch-time flags:
+
+- `--config <path>`
+  - Use a config file from a custom path.
+- `--prefill <string>`
+  - Launch qst with an initial search string.
+- `--shy`
+  - Hide entries until you start typing.
+- `--no-fuzzy`
+  - Disable fuzzy finding in the launcher.
+- `--clear-history`
+  - Clear qst's app history.
+- `--clear-favorites`
+  - Clear qst's favorite apps.
+- `-p, --program <name>`
+  - Launch a program directly using fuzzy matching and exit without opening the UI.
+- `-s, --script <script>`
+  - Start qst with that script opened by default.
+- `--list-programs`
+  - Print all launchable desktop programs.
+- `--list-scripts`
+  - Print all scripts and their metadata.
+- `--gen-config`
+  - Generate `~/.config/qst/config.toml` or the file given by `--config`.
+- `-h, --help`
+  - Print the CLI help text.
+-  `-v, --version`
+  - Print the qst version.
+
+`--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
 
 ## Important defaults
 

@@ -3,7 +3,7 @@ name = "qst"
 version = "0.9.0"
 authors = ["GitanElyon"]
 edition = "2024"
-description = "A Community Driven Application CLI Quick Script Tool"
+description = "A Community Driven CLI Quick Script Tool"
 license = "MIT"
 repository = "https://github.com/gitanelyon/qst"
 documentation = "https://github.com/GitanElyon/awesome-qst/blob/main/DOCS.md"
@@ -24,5 +24,8 @@ arboard = "3.2"
 libloading = "0.8"
 meval = "0.2.0"
 quadrature = "0.1.2"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-graviola = "0.3"
+webpki-roots = "1"
 
 [package.metadata.nix]

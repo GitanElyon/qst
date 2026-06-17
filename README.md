@@ -18,6 +18,8 @@ Qst, pronounced "quest", is a TUI Linux application launcher built with Rust + R
 
 qst is the host runtime. Plugins are script-based and live in `~/.config/qst/scripts/`. Plugins can define custom triggers, query handling, and output formatting via a simple line-oriented protocol. 
 
+Note: qst bundles a helper script, `loader.sh`, and will install it into `~/.config/qst/scripts/` on first run so users can browse and install community plugins without manually copying files.
+
 Scripts can be executable files (any language) or extension-based scripts run through supported interpreters (`.sh`, `.bash`, `.zsh`, `.fish`, `.py`, `.pl`, `.rb`, `.js`, `.lua`).
 
 The plugin ecosystem is cataloged in `awesome-qst`:
@@ -49,6 +51,23 @@ Either run qst from the terminal:
 ```bash
 qst
 ```
+
+You can also use launch-time flags:
+
+```bash
+qst --config ~/.config/qst/custom.toml
+qst --prefill "runner"
+qst --shy
+qst --no-fuzzy
+qst --clear-history
+qst --clear-favorites
+qst --program firefox
+qst --script runner
+qst --list-programs
+qst --list-scripts
+```
+
+`--config` points qst at a different config file. `--prefill` seeds the initial search text. `--shy` starts with the launcher list hidden until you type. `--no-fuzzy` disables fuzzy finding. `--clear-history` clears qst's app history. `--clear-favorites` clears favorite apps. `-p, --program` launches a desktop program directly using qst's fuzzy matching. `-s, --script` opens that script by default when qst starts. The list flags print the available programs or scripts, including script metadata parsed from the script source header.
 
 Or bind to a global hotkey (e.g. `Super+Space`) using your desktop environment's keyboard settings.
 

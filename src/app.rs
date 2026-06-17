@@ -3,14 +3,23 @@ use crate::history::History;
 use dirs::config_dir;
 use freedesktop_desktop_entry::{Iter, default_paths, get_languages_from_env};
 use ratatui::widgets::ListState;
+use rustls::{ClientConfig, ClientConnection, Stream};
+use rustls_graviola;
 use std::{
     collections::HashMap,
     fs,
-    io,
+    io::{self, Read, Write},
+    net::{TcpStream, ToSocketAddrs},
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
+
+const REMOTE_LOADER_SCRIPT_URL: &str =
+    "https://raw.githubusercontent.com/GitanElyon/awesome-qst/main/scripts/loader.sh";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -97,12 +106,21 @@ pub struct ScriptItem {
 }
 
 #[derive(Debug, Clone)]
+pub struct ScriptListing {
+    pub id: String,
+    pub file_id: String,
+    pub trigger: Option<String>,
+    pub metadata: Option<ScriptMetadata>,
+}
+
+#[derive(Debug, Clone)]
 struct ScriptPlugin {
     id: String,
     file_id: String,
     path: PathBuf,
     trigger: Option<String>,
     interpreter: Option<&'static str>,
+    metadata: Option<ScriptMetadata>,
 }
 
 pub struct App {
@@ -122,11 +140,16 @@ pub struct App {
     pub script_meta: Option<ScriptMetadata>,
     pub script_items: Vec<ScriptItem>,
     pub qst_ascii: String,
+    pub hide_entries_until_typing: bool,
+    pub fuzzy_matching_enabled: bool,
     scripts: Vec<ScriptPlugin>,
 }
 
 impl App {
+    const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
+
     pub fn new(config: AppConfig, status_message: Option<String>) -> Self {
+        Self::ensure_loader_script_installed();
         let (mut script_aliases, mut app_aliases) = Self::load_aliases();
         let history = History::load();
         let scripts = Self::load_scripts(&mut script_aliases);
@@ -174,12 +197,74 @@ impl App {
             script_meta: None,
             script_items: Vec::new(),
             qst_ascii,
+            hide_entries_until_typing: false,
+            fuzzy_matching_enabled: true,
             scripts,
         };
 
         app.sort_entries();
         app.filtered_entries = app.entries.clone();
         app
+    }
+
+    pub fn script_listings(&self) -> Vec<ScriptListing> {
+        self.scripts
+            .iter()
+            .map(|script| ScriptListing {
+                id: script.id.clone(),
+                file_id: script.file_id.clone(),
+                trigger: script.trigger.clone(),
+                metadata: script.metadata.clone(),
+            })
+            .collect()
+    }
+
+    pub fn launch_program_by_name(&mut self, program_name: &str) -> Result<(), String> {
+        let program_name = program_name.trim();
+        let query = program_name.to_lowercase();
+        let Some(entry) = self
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                Self::search_score(&query, &entry.name, self.fuzzy_matching_enabled)
+                    .map(|score| (score, entry))
+            })
+            .max_by(|(score_a, entry_a), (score_b, entry_b)| {
+                score_a
+                    .cmp(score_b)
+                    .then_with(|| entry_a.name.to_lowercase().cmp(&entry_b.name.to_lowercase()))
+                    .then_with(|| entry_a.name.cmp(&entry_b.name))
+            })
+            .map(|(_, entry)| entry.clone())
+        else {
+            return Err(format!("No program found matching '{program_name}'"));
+        };
+
+        self.history.increment(&entry.name);
+
+        let Some((cmd, args)) = entry.exec_args.split_first() else {
+            return Err(format!("Program '{}' has no launch command", entry.name));
+        };
+
+        let launch_args = self.build_exec_args(args, None);
+        self.spawn_command(cmd, launch_args, &entry.name)
+    }
+
+    pub fn launch_script_mode(&mut self, script_name: &str) -> Result<(), String> {
+        let script_name = script_name.trim();
+        let Some(script) = self.find_script(script_name).cloned() else {
+            return Err(format!("No script found matching '{script_name}'"));
+        };
+
+        let query = script
+            .trigger
+            .clone()
+            .or_else(|| Some(script.file_id.clone()))
+            .unwrap_or_else(|| script.id.clone());
+
+        self.set_search_query(query);
+        self.update_filter();
+        Ok(())
     }
 
     fn char_count(input: &str) -> usize {
@@ -539,6 +624,7 @@ impl App {
         items: Vec<ScriptItem>,
         query: &str,
         script_fuzzy: bool,
+        fuzzy_matching_enabled: bool,
     ) -> Vec<ScriptItem> {
         if query.trim().is_empty() {
             return items;
@@ -548,9 +634,9 @@ impl App {
         let mut passthrough_items: Vec<(usize, ScriptItem)> = Vec::new();
 
         for (index, item) in items.into_iter().enumerate() {
-            let fuzzy_enabled = script_fuzzy || item.meta.fuzzy;
+            let fuzzy_enabled = fuzzy_matching_enabled && (script_fuzzy || item.meta.fuzzy);
             if fuzzy_enabled {
-                if let Some(score) = fuzzy_score(query, &Self::script_item_search_text(&item)) {
+                if let Some(score) = Self::search_score(query, &Self::script_item_search_text(&item), true) {
                     fuzzy_matches.push((score, index, item));
                 }
             } else {
@@ -671,14 +757,18 @@ impl App {
         }
 
         if self.mode != AppMode::FileSelection && query_slice.is_empty() {
-            self.filtered_entries = self.entries.clone();
+            if self.hide_entries_until_typing {
+                self.filtered_entries = Vec::new();
+            } else {
+                self.filtered_entries = self.entries.clone();
+            }
         } else if self.mode != AppMode::FileSelection {
             let query = query_slice.to_lowercase();
             let mut matches: Vec<(i64, AppEntry)> = self
                 .entries
                 .iter()
                 .filter_map(|e| {
-                    fuzzy_score(&query, &e.name).map(|score| (score, e.clone()))
+                    Self::search_score(&query, &e.name, self.fuzzy_matching_enabled).map(|score| (score, e.clone()))
                 })
                 .collect();
 
@@ -700,7 +790,8 @@ impl App {
                         .entries
                         .iter()
                         .filter_map(|e| {
-                            fuzzy_score(&sub_query_lower, &e.name).map(|score| (score, e.clone()))
+                            Self::search_score(&sub_query_lower, &e.name, self.fuzzy_matching_enabled)
+                                .map(|score| (score, e.clone()))
                         })
                         .collect();
 
@@ -886,60 +977,65 @@ impl App {
             if let Some(entry) = app_entry {
                 self.history.increment(&entry.name);
                 if let Some((cmd, args)) = entry.exec_args.split_first() {
-                    let mut final_args = Vec::new();
-
-                    if self.config.features.enable_launch_args {
-                        if let Some(launch_args) = &self.launch_args {
-                            let mut current_launch_args = launch_args.clone();
-
-                            if self.mode == AppMode::FileSelection {
-                                if let Some(selected_file) = self.filtered_files.get(i) {
-                                    if let Some(last) = current_launch_args.last_mut() {
-                                        *last = selected_file.clone();
-                                    }
-                                }
-                            }
-
-                            let expanded_launch_args: Vec<String> = current_launch_args
-                                .iter()
-                                .map(|arg| self.expand_path(arg))
-                                .collect();
-
-                            let mut replaced = false;
-                            for arg in args {
-                                if ["%f", "%F", "%u", "%U"].contains(&arg.as_str()) {
-                                    final_args.extend(expanded_launch_args.clone());
-                                    replaced = true;
-                                } else {
-                                    final_args.push(arg.clone());
-                                }
-                            }
-
-                            if !replaced {
-                                final_args.extend(expanded_launch_args);
-                            }
-                        } else {
-                            for arg in args {
-                                if !["%f", "%F", "%u", "%U"].contains(&arg.as_str()) {
-                                    final_args.push(arg.clone());
-                                }
-                            }
-                        }
+                    let selected_file = if self.mode == AppMode::FileSelection {
+                        self.filtered_files.get(i).map(String::as_str)
                     } else {
-                        for arg in args {
-                            if !["%f", "%F", "%u", "%U"].contains(&arg.as_str()) {
-                                final_args.push(arg.clone());
-                            }
-                        }
-                    }
-
-                    self.spawn_command(cmd, final_args, &entry.name);
+                        None
+                    };
+                    let final_args = self.build_exec_args(args, selected_file);
+                    let _ = self.spawn_command(cmd, final_args, &entry.name);
                 }
             }
         }
     }
 
-    fn spawn_command(&mut self, cmd: &str, args: Vec<String>, entry_name: &str) {
+    fn build_exec_args(&self, args: &[String], selected_file: Option<&str>) -> Vec<String> {
+        let mut final_args = Vec::new();
+        let launch_placeholders = ["%f", "%F", "%u", "%U"];
+
+        if self.config.features.enable_launch_args {
+            if let Some(launch_args) = &self.launch_args {
+                let mut current_launch_args = launch_args.clone();
+
+                if let Some(selected_file) = selected_file {
+                    if let Some(last) = current_launch_args.last_mut() {
+                        *last = selected_file.to_string();
+                    }
+                }
+
+                let expanded_launch_args: Vec<String> = current_launch_args
+                    .iter()
+                    .map(|arg| self.expand_path(arg))
+                    .collect();
+
+                let mut replaced = false;
+                for arg in args {
+                    if launch_placeholders.contains(&arg.as_str()) {
+                        final_args.extend(expanded_launch_args.clone());
+                        replaced = true;
+                    } else {
+                        final_args.push(arg.clone());
+                    }
+                }
+
+                if !replaced {
+                    final_args.extend(expanded_launch_args);
+                }
+
+                return final_args;
+            }
+        }
+
+        for arg in args {
+            if !launch_placeholders.contains(&arg.as_str()) {
+                final_args.push(arg.clone());
+            }
+        }
+
+        final_args
+    }
+
+    fn spawn_command(&mut self, cmd: &str, args: Vec<String>, entry_name: &str) -> Result<(), String> {
         let mut command = Command::new(cmd);
         command
             .args(args)
@@ -959,10 +1055,12 @@ impl App {
             Ok(_) => {
                 self.should_quit = true;
                 self.status_message = None;
+                Ok(())
             }
             Err(err) => {
                 self.status_message =
                     Some(format!("Failed to launch {}: {}", entry_name, err));
+                Err(err.to_string())
             }
         }
     }
@@ -1106,6 +1204,89 @@ impl App {
         Some(dir)
     }
 
+    fn ensure_loader_script_installed() {
+        let Some(dir) = Self::scripts_dir() else {
+            return;
+        };
+
+        let loader_path = dir.join("loader.sh");
+        if loader_path.exists() {
+            Self::ensure_executable(&loader_path);
+            return;
+        }
+
+        if fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+
+        let loader_script = Self::fetch_remote_loader_script().unwrap_or_else(|| {
+            "#!/bin/sh\necho \"qst! meta \"\ncat \"$@\"\n".to_string()
+        });
+
+        if fs::write(&loader_path, loader_script).is_ok() {
+            Self::ensure_executable(&loader_path);
+        }
+    }
+
+    fn fetch_remote_loader_script() -> Option<String> {
+        rustls_graviola::default_provider()
+            .install_default()
+            .ok()?;
+
+        let url = REMOTE_LOADER_SCRIPT_URL.strip_prefix("https://")?;
+        let (host, rest) = url.split_once('/')?;
+        let path = format!("/{rest}");
+
+        let addr = (host, 443).to_socket_addrs().ok()?.next()?;
+        let mut tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        );
+
+        let server_name = rustls::pki_types::ServerName::try_from(host).ok()?;
+        let mut tls_conn = ClientConnection::new(config, server_name).ok()?;
+        let mut tls_stream = Stream::new(&mut tls_conn, &mut tcp);
+
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        );
+        tls_stream.write_all(request.as_bytes()).ok()?;
+        tls_stream.flush().ok()?;
+
+        let mut response = Vec::new();
+        tls_stream.read_to_end(&mut response).ok()?;
+        let response = String::from_utf8(response).ok()?;
+
+        let status = response.lines().next()?;
+        let code = status.split_whitespace().nth(1)?;
+        if !code.starts_with('2') {
+            return None;
+        }
+
+        let body = response.split("\r\n\r\n").nth(1)?;
+        let body = body.trim().to_string();
+        if body.is_empty() { None } else { Some(body) }
+    }
+
+    fn ensure_executable(path: &Path) {
+        let Ok(metadata) = fs::metadata(path) else {
+            return;
+        };
+
+        let mut permissions = metadata.permissions();
+        let mode = permissions.mode();
+        if mode & 0o111 != 0o111 {
+            permissions.set_mode(mode | 0o111);
+            let _ = fs::set_permissions(path, permissions);
+        }
+    }
+
     fn script_interpreter_for_extension(ext: &str) -> Option<&'static str> {
         match ext {
             "sh" => Some("sh"),
@@ -1136,6 +1317,17 @@ impl App {
         }
 
         normalized.to_string()
+    }
+
+    fn read_script_metadata_from_source(path: &Path) -> Option<ScriptMetadata> {
+        let contents = fs::read_to_string(path).ok()?;
+
+        contents.lines().find_map(|line| {
+            let line = line.trim_start();
+            let metadata_line = line.strip_prefix("echo \"qst! meta ")?;
+            let metadata_line = metadata_line.strip_suffix('"').unwrap_or(metadata_line);
+            Self::parse_script_metadata(metadata_line)
+        })
     }
 
     fn load_scripts(aliases: &mut HashMap<String, String>) -> Vec<ScriptPlugin> {
@@ -1182,6 +1374,7 @@ impl App {
                 .unwrap_or(stem)
                 .to_string();
             let trigger = aliases.remove(stem).or_else(|| aliases.remove(&file_id));
+            let metadata = Self::read_script_metadata_from_source(&path);
 
             scripts.push(ScriptPlugin {
                 id,
@@ -1189,6 +1382,7 @@ impl App {
                 path,
                 trigger,
                 interpreter,
+                metadata,
             });
         }
 
@@ -1366,7 +1560,56 @@ impl App {
         true
     }
 
+    fn find_script(&self, selector: &str) -> Option<&ScriptPlugin> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return None;
+        }
+
+        self.scripts.iter().find(|script| {
+            script.id.eq_ignore_ascii_case(selector)
+                || script.file_id.eq_ignore_ascii_case(selector)
+                || script
+                    .trigger
+                    .as_deref()
+                    .is_some_and(|trigger| trigger.eq_ignore_ascii_case(selector))
+                || script
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.name.as_deref())
+                    .is_some_and(|name| name.eq_ignore_ascii_case(selector))
+        })
+    }
+
+            fn search_score(query: &str, target: &str, fuzzy_matching_enabled: bool) -> Option<i64> {
+                let query = query.trim();
+                if query.is_empty() {
+                    return Some(0);
+                }
+
+                if fuzzy_matching_enabled {
+                    return fuzzy_score(query, target);
+                }
+
+                let query_lower = query.to_lowercase();
+                let target_lower = target.to_lowercase();
+                if target_lower.contains(&query_lower) {
+                    Some((query_lower.len() as i64).saturating_mul(10) - target_lower.len() as i64)
+                } else {
+                    None
+                }
+            }
+
     fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
+        self.run_script_with_timeout(script, payload, Self::SCRIPT_TIMEOUT)
+    }
+
+    fn run_script_with_timeout(
+        &self,
+        script: &ScriptPlugin,
+        payload: &str,
+        timeout: Duration,
+    ) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
         let mut command = if let Some(interpreter) = script.interpreter {
             let mut command = Command::new(interpreter);
             command.arg(&script.path);
@@ -1375,29 +1618,84 @@ impl App {
             Command::new(&script.path)
         };
 
-        let output = command
+        let mut child = command
             .arg(payload)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
             .map_err(|err| err.to_string())?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to capture script stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "failed to capture script stderr".to_string())?;
+
+        let stdout_handle = thread::spawn(move || Self::read_pipe(stdout));
+        let stderr_handle = thread::spawn(move || Self::read_pipe(stderr));
+
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait().map_err(|err| err.to_string())? {
+                Some(status) => break status,
+                None => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = stdout_handle.join();
+                        let _ = stderr_handle.join();
+                        return Err(format!("script timed out after {:?}", timeout));
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+            }
+        };
+
+        let (stdout, stderr) = Self::collect_script_output(stdout_handle, stderr_handle)?;
+
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
             if stderr.is_empty() {
-                return Err(format!("exit code {:?}", output.status.code()));
+                return Err(format!("exit code {:?}", status.code()));
             }
             return Err(stderr);
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(Self::parse_script_output(&stdout, payload, &script.id))
+        let stdout = String::from_utf8_lossy(&stdout);
+        Ok(Self::parse_script_output(&stdout, payload, &script.id, self.fuzzy_matching_enabled))
+    }
+
+    fn read_pipe<R>(mut pipe: R) -> Vec<u8>
+    where
+        R: Read + Send + 'static,
+    {
+        let mut output = Vec::new();
+        let _ = pipe.read_to_end(&mut output);
+        output
+    }
+
+    fn collect_script_output(
+        stdout_handle: thread::JoinHandle<Vec<u8>>,
+        stderr_handle: thread::JoinHandle<Vec<u8>>,
+    ) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let stdout = stdout_handle
+            .join()
+            .map_err(|_| "failed to read script stdout".to_string())?;
+        let stderr = stderr_handle
+            .join()
+            .map_err(|_| "failed to read script stderr".to_string())?;
+
+        Ok((stdout, stderr))
     }
 
     fn parse_script_output(
         output: &str,
         query: &str,
         script_id: &str,
+        fuzzy_matching_enabled: bool,
     ) -> (Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>) {
         let mut title: Option<String> = None;
         let mut message: Option<String> = None;
@@ -1416,16 +1714,6 @@ impl App {
             if let Some(directive) = line.strip_prefix("qst! ") {
                 if let Some(value) = directive.strip_prefix("meta ") {
                     let value = value.trim();
-                    if let Some(parsed_meta) = Self::parse_script_metadata(value) {
-                        if title.is_none() {
-                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
-                                title = Some(format!(" {} ", name));
-                            }
-                        }
-                        meta = Some(parsed_meta);
-                        continue;
-                    }
-
                     if let Some(field) = Self::parse_script_metadata_field(value) {
                         if let Some(current_meta) = meta.as_ref() {
                             if let Some(field_value) = Self::script_metadata_field(current_meta, field)
@@ -1435,6 +1723,16 @@ impl App {
                                 message = Some(field_value.to_string());
                             }
                         }
+                        continue;
+                    }
+
+                    if let Some(parsed_meta) = Self::parse_script_metadata(value) {
+                        if title.is_none() {
+                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
+                                title = Some(format!(" {} ", name));
+                            }
+                        }
+                        meta = Some(parsed_meta);
                         continue;
                     }
                 }
@@ -1591,7 +1889,7 @@ impl App {
             });
         }
 
-        let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy);
+        let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy, fuzzy_matching_enabled);
         let mut items = items;
         items.sort_by(|a, b| b.meta.urgent.cmp(&a.meta.urgent));
 
@@ -1702,6 +2000,9 @@ impl App {
                     true
                 }
                 ScriptAction::RefreshResults => {
+                    if let Some(mut child) = pending_execute.take() {
+                        let _ = child.wait();
+                    }
                     self.update_filter();
                     true
                 }
@@ -1878,7 +2179,7 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
 
     struct TempDirCleanup(PathBuf);
 
@@ -1906,6 +2207,8 @@ mod tests {
             script_meta: None,
             script_items: Vec::new(),
             qst_ascii: String::new(),
+            hide_entries_until_typing: false,
+            fuzzy_matching_enabled: true,
             scripts: Vec::new(),
         }
     }
@@ -1962,7 +2265,7 @@ mod tests {
             meta: ScriptRowMeta::default(),
         };
 
-        let filtered = App::fuzzy_filter_script_items(vec![plain_item.clone(), fuzzy_item.clone()], "clb", false);
+        let filtered = App::fuzzy_filter_script_items(vec![plain_item.clone(), fuzzy_item.clone()], "clb", false, true);
 
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].title, fuzzy_item.title);
@@ -1991,7 +2294,7 @@ mod tests {
     fn parse_script_output_parses_script_metadata_header() {
         let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! title My Awesome script\n";
 
-        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample", true);
 
         assert_eq!(title.as_deref(), Some(" My Awesome script "));
         assert!(message.is_none());
@@ -2008,7 +2311,7 @@ mod tests {
     fn parse_script_output_supports_script_metadata_field_selection() {
         let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! meta author\n";
 
-        let (title, message, meta, items) = App::parse_script_output(output, "", "sample");
+        let (title, message, meta, items) = App::parse_script_output(output, "", "sample", true);
 
         assert_eq!(title.as_deref(), Some(" My Awesome script "));
         assert_eq!(message.as_deref(), Some("John Doe"));
@@ -2044,6 +2347,79 @@ mod tests {
 
         let filtered = app.list_completions(&format!("{}a", query));
         assert_eq!(filtered, vec![format!("{}alpha.txt", query)]);
+    }
+
+    #[test]
+    fn run_script_times_out_for_hanging_scripts() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("hang.sh");
+        fs::write(&script_path, "#!/bin/sh\nsleep 1\n").unwrap();
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let app = test_app();
+        let script = ScriptPlugin {
+            id: "hang".to_string(),
+            file_id: "hang.sh".to_string(),
+            path: script_path,
+            trigger: None,
+            interpreter: None,
+            metadata: None,
+        };
+
+        let err = app
+            .run_script_with_timeout(&script, "", Duration::from_millis(50))
+            .expect_err("script should time out");
+
+        assert!(err.contains("timed out"));
+    }
+
+    #[test]
+    fn script_storage_path_rejects_absolute_and_parent_paths() {
+        assert!(App::script_storage_path("sample", "/tmp/data").is_none());
+        assert!(App::script_storage_path("sample", "../data").is_none());
+        assert!(App::script_storage_path("sample", "nested/data").is_some());
+    }
+
+    #[test]
+    fn read_script_metadata_from_source_parses_header() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("meta.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\necho \"qst! meta Sample Name, 1.2.3, Tester, Describes the script\"\n",
+        )
+        .unwrap();
+
+        let metadata = App::read_script_metadata_from_source(&script_path).expect("metadata should be parsed");
+
+        assert_eq!(metadata.name.as_deref(), Some("Sample Name"));
+        assert_eq!(metadata.version.as_deref(), Some("1.2.3"));
+        assert_eq!(metadata.author.as_deref(), Some("Tester"));
+        assert_eq!(metadata.description.as_deref(), Some("Describes the script"));
+    }
+
+    #[test]
+    fn ensure_executable_adds_execute_bits_without_rewriting_content() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("loader.sh");
+        fs::write(&script_path, "#!/bin/sh\necho loader\n").unwrap();
+
+        App::ensure_executable(&script_path);
+
+        let content = fs::read_to_string(&script_path).unwrap();
+        let mode = fs::metadata(&script_path).unwrap().permissions().mode();
+
+        assert_eq!(content, "#!/bin/sh\necho loader\n");
+        assert_eq!(mode & 0o111, 0o111);
     }
 }
 

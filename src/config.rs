@@ -6,6 +6,7 @@ use ratatui::{
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 pub struct ConfigLoadResult {
     pub config: AppConfig,
@@ -30,51 +31,98 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn load() -> ConfigLoadResult {
+    pub fn load(config_path: Option<&Path>) -> ConfigLoadResult {
         let default = Self::default();
         let mut warning = None;
-        let config = match config_dir() {
-            Some(mut dir) => {
-                dir.push("qst");
-                if fs::create_dir_all(&dir).is_err() {
-                    warning = Some("Unable to create ~/.config/qst, using defaults".into());
-                    default
-                } else {
-                    let config_path = dir.join("config.toml");
-                    if config_path.exists() {
-                        match fs::read_to_string(&config_path) {
-                            Ok(contents) => match toml::from_str::<AppConfig>(&contents) {
-                                Ok(parsed) => parsed,
-                                Err(err) => {
-                                    warning = Some(format!(
-                                        "Invalid config ({}). Falling back to defaults.",
-                                        err
-                                    ));
-                                    default
-                                }
-                            },
-                            Err(err) => {
-                                warning = Some(format!(
-                                    "Failed to read config ({}). Using defaults.",
-                                    err
-                                ));
-                                default
-                            }
+        let Some(config_path) = Self::resolve_config_path(config_path) else {
+            warning = Some("Could not locate configuration directory. Using defaults.".into());
+            return ConfigLoadResult { config: default, warning };
+        };
+
+        if let Some(parent) = config_path.parent() {
+            if !parent.as_os_str().is_empty() && fs::create_dir_all(parent).is_err() {
+                warning = Some(match config_path == Self::default_config_path().unwrap_or_default() {
+                    true => "Unable to create ~/.config/qst, using defaults".into(),
+                    false => format!("Unable to create configuration directory: {:?}", parent),
+                });
+                return ConfigLoadResult { config: default, warning };
+            }
+        }
+
+        let config = if config_path.exists() {
+            match fs::read_to_string(&config_path) {
+                Ok(contents) => match toml::from_str::<AppConfig>(&contents) {
+                    Ok(parsed) => {
+                        let validation_warnings = parsed.validation_warnings();
+                        if !validation_warnings.is_empty() {
+                            let validation_warning = validation_warnings.join("\n");
+                            warning = Some(match warning.take() {
+                                Some(existing) => format!("{existing}\n{validation_warning}"),
+                                None => validation_warning,
+                            });
                         }
-                    } else {
-                        if let Ok(serialized) = toml::to_string_pretty(&default) {
-                            let _ = fs::write(&config_path, serialized);
-                        }
+                        parsed
+                    }
+                    Err(err) => {
+                        warning = Some(format!(
+                            "Invalid config ({}). Falling back to defaults.",
+                            err
+                        ));
                         default
                     }
+                },
+                Err(err) => {
+                    warning = Some(format!(
+                        "Failed to read config ({}). Using defaults.",
+                        err
+                    ));
+                    default
                 }
             }
-            None => {
-                warning = Some("Could not locate configuration directory. Using defaults.".into());
-                default
+        } else {
+            if let Ok(serialized) = toml::to_string_pretty(&default) {
+                let _ = fs::write(&config_path, serialized);
             }
+            default
         };
         ConfigLoadResult { config, warning }
+    }
+
+    fn resolve_config_path(config_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(config_path) = config_path {
+            return Some(config_path.to_path_buf());
+        }
+
+        let mut dir = config_dir()?;
+        dir.push("qst");
+        Some(dir.join("config.toml"))
+    }
+
+    fn default_config_path() -> Option<PathBuf> {
+        Self::resolve_config_path(None)
+    }
+
+    pub fn validation_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        self.window.collect_color_warnings("window", &mut warnings);
+        self.outer_box.collect_color_warnings("outer-box", &mut warnings);
+        self.qst_ascii.section.collect_color_warnings("qst-ascii", &mut warnings);
+        collect_color_warnings("qst-ascii.gradient-colors", &self.qst_ascii.gradient_colors, &mut warnings);
+        self.input.collect_color_warnings("input", &mut warnings);
+        self.list.section.collect_color_warnings("results", &mut warnings);
+        collect_color_warnings("entry.fg", &self.entry.fg, &mut warnings);
+        collect_color_warnings("entry.bg", &self.entry.bg, &mut warnings);
+        self.entry_selected.collect_color_warnings("entry-selected", &mut warnings);
+        self.meta.active.collect_color_warnings("meta.active", &mut warnings);
+        self.meta.urgent.collect_color_warnings("meta.urgent", &mut warnings);
+        self.text.section.collect_color_warnings("text", &mut warnings);
+
+        validate_key_binding("general.favorite_key", self.general.favorite_key.as_deref(), &mut warnings);
+        validate_key_binding("general.jump_to_top_key", self.general.jump_to_top_key.as_deref(), &mut warnings);
+        validate_key_binding("general.jump_to_bottom_key", self.general.jump_to_bottom_key.as_deref(), &mut warnings);
+
+        warnings
     }
 }
 
@@ -337,6 +385,12 @@ impl SectionConfig {
 
         block.style(self.style())
     }
+
+    fn collect_color_warnings(&self, section_name: &str, warnings: &mut Vec<String>) {
+        collect_color_warnings(&format!("{}.fg", section_name), &self.fg, warnings);
+        collect_color_warnings(&format!("{}.bg", section_name), &self.bg, warnings);
+        collect_color_warnings(&format!("{}.border-color", section_name), &self.border_color, warnings);
+    }
 }
 
 impl Default for SectionConfig {
@@ -448,6 +502,85 @@ pub fn parse_color(value: &str) -> Option<Color> {
         "lightcyan" | "light-cyan" => Some(Color::LightCyan),
         "lightyellow" | "light-yellow" => Some(Color::LightYellow),
         _ => None,
+    }
+}
+
+fn collect_color_warnings(label: &str, values: &[String], warnings: &mut Vec<String>) {
+    for value in values {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() && parse_color(trimmed).is_none() {
+            warnings.push(format!("Invalid color value for {label}: {trimmed:?}"));
+        }
+    }
+}
+
+fn validate_key_binding(label: &str, value: Option<&str>, warnings: &mut Vec<String>) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+
+    if !is_valid_key_binding(value) {
+        warnings.push(format!("Invalid key binding for {label}: {value:?}"));
+    }
+}
+
+fn is_valid_key_binding(value: &str) -> bool {
+    let mut has_code = false;
+
+    for part in value.to_lowercase().split('+').map(str::trim).filter(|part| !part.is_empty()) {
+        match part {
+            "ctrl" | "control" | "alt" | "option" | "shift" | "super" | "cmd" | "win" | "meta" => {}
+            "enter" | "return" | "esc" | "escape" | "backspace" | "tab" | "space" | "up" | "down" | "left" | "right" => {
+                has_code = true;
+            }
+            s if s.len() == 1 => {
+                has_code = true;
+            }
+            s if s.starts_with('f') && s.len() > 1 => {
+                if s[1..].parse::<u8>().is_ok() {
+                    has_code = true;
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+
+    has_code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_warnings_include_invalid_colors_and_keys() {
+        let config = AppConfig {
+            general: GeneralConfig {
+                favorite_key: Some("alt+".to_string()),
+                jump_to_top_key: Some("shift+unknown".to_string()),
+                jump_to_bottom_key: Some("ctrl+down".to_string()),
+                ..GeneralConfig::default()
+            },
+            window: SectionConfig {
+                fg: vec!["not-a-color".to_string()],
+                ..SectionConfig::default()
+            },
+            qst_ascii: QstAsciiConfig {
+                gradient_colors: vec!["still-not-a-color".to_string()],
+                ..QstAsciiConfig::default()
+            },
+            ..AppConfig::default()
+        };
+
+        let warnings = config.validation_warnings();
+
+        assert!(warnings.iter().any(|warning| warning.contains("window.fg")));
+        assert!(warnings.iter().any(|warning| warning.contains("qst-ascii.gradient-colors")));
+        assert!(warnings.iter().any(|warning| warning.contains("general.favorite_key")));
+        assert!(warnings.iter().any(|warning| warning.contains("general.jump_to_top_key")));
+        assert!(!warnings.iter().any(|warning| warning.contains("general.jump_to_bottom_key")));
     }
 }
 
