@@ -32,6 +32,11 @@ Install via Nix (recommended):
 nix profile install "github:GitanElyon/qst"
 ```
 
+Or via the AUR (Arch Linux):
+```bash
+yay -S qst
+```
+
 Or via Cargo:
 ```bash
 cargo install --locked qst
