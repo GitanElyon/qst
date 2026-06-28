@@ -60,19 +60,17 @@ qst
 You can also use launch-time flags:
 
 ```bash
-qst --config ~/.config/qst/custom.toml
-qst --prefill "runner"
-qst --shy
-qst --no-fuzzy
-qst --clear-history
-qst --clear-favorites
-qst --program firefox
-qst --script runner
-qst --list-programs
-qst --list-scripts
+qst --config <path>       # points Qst to a new different config file
+qst --prefill <string>    # seeds the initial search text
+qst --shy                 # opens launcher with text hidden untill query is entered
+qst --no-fuzzy            # disables fuzzy finding
+qst --clear-history       # clears Qst's launch history
+qst --clear-favorites     # clears favorite list
+qst --program <program>   # launches the first result of the query
+qst --script <script>     # opens the script on startup
+qst --list-programs       # lists available programs
+qst --list-scripts        # lets available scripts
 ```
-
-`--config` points qst at a different config file. `--prefill` seeds the initial search text. `--shy` starts with the launcher list hidden until you type. `--no-fuzzy` disables fuzzy finding. `--clear-history` clears qst's app history. `--clear-favorites` clears favorite apps. `-p, --program` launches a desktop program directly using qst's fuzzy matching. `-s, --script` opens that script by default when qst starts. The list flags print the available programs or scripts, including script metadata parsed from the script source header.
 
 Or bind to a global hotkey (e.g. `Super+Space`) using your desktop environment's keyboard settings.
 
