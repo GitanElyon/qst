@@ -2,6 +2,7 @@ use crate::{
     app::{App, AppMode},
     config::TextAlignment,
 };
+use log::debug;
 use ratatui::{
     prelude::*,
     text::{Line, Span, Text},
@@ -10,6 +11,7 @@ use ratatui::{
 use std::f32::consts::PI;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    debug!("Drawing frame");
     let area = f.area();
     let config = &app.config;
     let general = &config.general;

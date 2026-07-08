@@ -1,4 +1,5 @@
 use dirs::config_dir;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -16,10 +17,15 @@ impl History {
             path.push("qst");
             path.push("history.toml");
             if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(history) = toml::from_str(&content) {
-                        return history;
-                    }
+                match fs::read_to_string(&path) {
+                    Ok(content) => match toml::from_str(&content) {
+                        Ok(history) => {
+                            debug!("History loaded from {:?}", path);
+                            return history;
+                        }
+                        Err(err) => warn!("Failed to parse history file: {}", err),
+                    },
+                    Err(err) => warn!("Failed to read history file: {}", err),
                 }
             }
         }
@@ -32,7 +38,9 @@ impl History {
             if fs::create_dir_all(&path).is_ok() {
                 path.push("history.toml");
                 if let Ok(content) = toml::to_string(self) {
-                    let _ = fs::write(path, content);
+                    if fs::write(&path, content).is_ok() {
+                        debug!("History saved to {:?} ({} apps)", path, self.usage.len());
+                    }
                 }
             }
         }

@@ -51,10 +51,52 @@ qst also supports launch-time flags:
   - Generate `~/.config/qst/config.toml` or the file given by `--config`.
 - `-h, --help`
   - Print the CLI help text.
+- `--log-level <level>`
+  - Set the log level: `debug`, `info`, `warn`, or `error` (default: `info`). Overrides `cargo.toml` log level.
 -  `-v, --version`
   - Print the qst version.
 
 `--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
+
+## Logging
+
+Logs are written to `~/.local/state/qst/qst.log` in the format:
+
+```
+[2024-06-15 10:30:45.123] [INFO] [src/app.rs:127] message
+```
+
+### Log levels
+
+| Level | Config value | Purpose |
+|---|---|---|
+| `DEBUG` | `debug` | All actions, every user movement, click, and render |
+| `INFO` | `info` | When scripts are loaded or actions are taken |
+| `WARN` | `warn` | Minor errors like a script having a parsing problem |
+| `ERROR` | `error` | When a script won't load or the app crashes |
+
+Default: `info`.
+
+### Configuration
+
+The log level can be set via the config file in the `[general]` section:
+
+```toml
+[general]
+log_level = "debug"
+```
+
+Or via the `--log-level` CLI flag, which takes precedence over the config file:
+
+```bash
+qst --log-level debug
+```
+
+Valid values: `debug`, `info`, `warn`, `error`.
+
+### Session rotation
+
+Each session starts with a fresh `qst.log`. The previous session's log is automatically archived to `~/.local/state/qst/sessions/<YYYY-MM-DD_HH-MM-SS>.log` on startup.
 
 ## Important defaults
 

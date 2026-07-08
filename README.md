@@ -70,6 +70,7 @@ qst --program <program>   # launches the first result of the query
 qst --script <script>     # opens the script on startup
 qst --list-programs       # lists available programs
 qst --list-scripts        # lets available scripts
+qst --log-level debug     # set log level: debug, info, warn, error (default: info)
 ```
 
 Or bind to a global hotkey (e.g. `Super+Space`) using your desktop environment's keyboard settings.
@@ -88,6 +89,29 @@ bind = $mod, space, exec, [float; size 350 400] $terminal -e qst
 - `Enter`: launch/open selected item
 - `Esc`: quit
 - `Alt+f`: toggle favorite
+
+## Logging
+
+qst writes logs to `~/.local/state/qst/qst.log` with the following format:
+
+```
+[2024-06-15 10:30:45.123] [INFO] [src/app.rs:127] Loaded 17 scripts
+```
+
+### Log levels
+
+| Level | Purpose |
+|---|---|
+| `DEBUG` | All actions, user movement, key events, renders |
+| `INFO` | Script loads, program launches, config loaded |
+| `WARN` | Minor errors (parsing issues, script timeouts) |
+| `ERROR` | Fatal errors (script won't load, app crashes) |
+
+Default level is `INFO`. Configure via `--log-level <level>` flag or `log_level` in `config.toml` (`[general]` section).
+
+### Session history
+
+Each qst session starts fresh. The previous session's log is moved to `~/.local/state/qst/sessions/<timestamp>.log` automatically.
 
 ## Config files
 

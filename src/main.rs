@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod history;
+mod logger;
 mod ui;
 
 use crate::{app::App, config::AppConfig, ui::draw};
@@ -17,6 +18,7 @@ use std::fs;
 use std::io;
 use std::env;
 use std::path::{Path, PathBuf};
+use log::{debug, info, warn};
 
 enum CliAction {
     Interactive,
@@ -36,11 +38,36 @@ struct CliOptions {
     prefill: Option<String>,
     shy: bool,
     no_fuzzy: bool,
+    log_level: Option<String>,
     action: CliAction,
 }
 
 fn main() -> Result<()> {
     let options = parse_cli_options(env::args().skip(1))?;
+
+    let load_result = AppConfig::load(options.config_path.as_deref());
+
+    let log_level = options
+        .log_level
+        .as_deref()
+        .map(logger::parse_log_level)
+        .unwrap_or_else(|| {
+            load_result
+                .config
+                .general
+                .log_level
+                .as_deref()
+                .map(logger::parse_log_level)
+                .unwrap_or(log::LevelFilter::Info)
+        });
+
+    logger::QstLogger::initialize(log_level)?;
+    info!("qst v{} starting", env!("CARGO_PKG_VERSION"));
+
+    info!("Configuration loaded");
+    if let Some(warning) = &load_result.warning {
+        warn!("Config warnings: {warning}");
+    }
 
     match options.action {
         CliAction::Help => {
@@ -58,21 +85,18 @@ fn main() -> Result<()> {
         CliAction::ClearHistory => {
             let mut history = History::load();
             history.clear_history();
+            info!("Cleared qst history");
             println!("Cleared qst history.");
             return Ok(());
         }
         CliAction::ClearFavorites => {
             let mut history = History::load();
             history.clear_favorites();
+            info!("Cleared qst favorite apps");
             println!("Cleared qst favorite apps.");
             return Ok(());
         }
         _ => {}
-    }
-
-    let load_result = AppConfig::load(options.config_path.as_deref());
-    if let Some(warning) = &load_result.warning {
-        eprintln!("{warning}");
     }
 
     let mut app = App::new(load_result.config, load_result.warning);
@@ -87,21 +111,27 @@ fn main() -> Result<()> {
     }
 
     match options.action {
-        CliAction::Interactive => {}
+        CliAction::Interactive => {
+            info!("Entering interactive mode");
+        }
         CliAction::ListPrograms => {
+            info!("Listing programs");
             print_programs(&app);
             return Ok(());
         }
         CliAction::ListScripts => {
+            info!("Listing scripts");
             print_scripts(&app);
             return Ok(());
         }
         CliAction::LaunchProgram(program_name) => {
+            info!("Launching program by name: {program_name}");
             app.launch_program_by_name(&program_name)
                 .map_err(anyhow::Error::msg)?;
             return Ok(());
         }
         CliAction::LaunchScript(script_name) => {
+            info!("Launching script mode: {script_name}");
             app.launch_script_mode(&script_name)
                 .map_err(anyhow::Error::msg)?;
         }
@@ -116,8 +146,10 @@ fn main() -> Result<()> {
 
     loop {
         terminal.draw(|f| draw(f, &mut app))?;
+        debug!("Frame drawn");
 
         if let Event::Key(key) = event::read()? {
+            debug!("Key event: {:?}", key);
             if key.kind == KeyEventKind::Press {
                 if matches_key(&key, app.config.general.jump_to_top_key.as_deref().unwrap_or("alt+up")) {
                     app.select_first();
@@ -147,12 +179,14 @@ fn main() -> Result<()> {
         }
 
         if app.should_quit {
+            info!("User requested quit");
             break;
         }
     }
 
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
+    info!("qst shutting down");
     Ok(())
 }
 
@@ -162,6 +196,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
     let mut prefill = None;
     let mut shy = false;
     let mut no_fuzzy = false;
+    let mut log_level = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -199,6 +234,12 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
                 };
                 set_cli_action(&mut action, CliAction::LaunchScript(script_name))?;
             }
+            "--log-level" => {
+                let Some(value) = args.next() else {
+                    return Err(anyhow!("--log-level requires a value (debug, info, warn, error)"));
+                };
+                log_level = Some(value);
+            }
             _ => {}
         }
     }
@@ -208,6 +249,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
         prefill,
         shy,
         no_fuzzy,
+        log_level,
         action: action.unwrap_or(CliAction::Interactive),
     })
 }
@@ -277,6 +319,7 @@ fn print_help() {
     println!("  --list-programs         Print all launchable programs");
     println!("  --list-scripts          Print all scripts and their metadata");
     println!("  -v, --version           Print version information");
+    println!("  --log-level <level>     Set log level: debug, info, warn, error (default: info)");
     println!("  -h, --help              Print this help message");
 }
 
