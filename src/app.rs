@@ -1883,6 +1883,10 @@ impl App {
                     }
                     continue;
                 }
+                if let Some(value) = directive.strip_prefix("log ") {
+                    crate::logger::plugin_log(script_id, value.trim());
+                    continue;
+                }
                 continue;
             }
 
@@ -2292,6 +2296,15 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].title, fuzzy_item.title);
         assert_eq!(filtered[1].title, plain_item.title);
+    }
+
+    #[test]
+    fn parse_script_output_ignores_log_directive_and_continues_parsing() {
+        let output = "qst! title Test\nqst! log some debug info\nHello|world\n";
+        let (_title, _message, _meta, items) = App::parse_script_output(output, "", "test_logger", true);
+        assert_eq!(items.len(), 1, "log directive should not suppress item parsing");
+        assert_eq!(items[0].title, "Hello");
+        assert_eq!(items[0].value, "world");
     }
 
     #[test]
