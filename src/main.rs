@@ -62,6 +62,7 @@ fn main() -> Result<()> {
         });
 
     logger::QstLogger::initialize(log_level)?;
+    logger::install_panic_hook();
     info!("qst v{} starting", env!("CARGO_PKG_VERSION"));
 
     info!("Configuration loaded");

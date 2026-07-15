@@ -1,11 +1,17 @@
 use chrono::Local;
+use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
+use crossterm::execute;
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
+use std::backtrace::Backtrace;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
+use std::panic;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 pub struct QstLogger {
     file: Mutex<File>,
@@ -15,6 +21,7 @@ pub struct QstLogger {
 impl QstLogger {
     pub fn initialize(level: LevelFilter) -> Result<(), SetLoggerError> {
         let log_path = get_log_path();
+        let _ = LOG_PATH.set(log_path.clone());
         let sessions_dir = get_sessions_dir();
 
         if let Some(parent) = log_path.parent() {
@@ -98,6 +105,45 @@ pub fn parse_log_level(value: &str) -> LevelFilter {
     }
 }
 
+pub fn install_panic_hook() {
+    let prev_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+
+        let location = panic_info
+            .location()
+            .map(|loc| format!("{}:{}", loc.file(), loc.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            format!("{:?}", panic_info.payload())
+        };
+
+        let backtrace = Backtrace::capture();
+        let details = format!(
+            "[{}] [PANIC] [{}] {}\nBacktrace:\n{}\n",
+            timestamp, location, msg, backtrace,
+        );
+
+        if let Some(path) = LOG_PATH.get() {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = file.write_all(details.as_bytes());
+                let _ = file.flush();
+            }
+        }
+
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stderr(), LeaveAlternateScreen);
+        let _ = io::stderr().write_all(details.as_bytes());
+
+        prev_hook(panic_info);
+    }));
+}
+
 fn rotated_plugins() -> &'static Mutex<HashSet<String>> {
     static PLUGINS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     PLUGINS.get_or_init(|| Mutex::new(HashSet::new()))
@@ -168,8 +214,16 @@ mod tests {
     use super::*;
     use std::fs;
 
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn with_temp_home(test: fn(PathBuf)) {
-        let dir = std::env::temp_dir().join(format!("qst-log-test-{}", std::process::id()));
+        let _guard = TEST_LOCK.lock().unwrap();
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "qst-log-test-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let _ = fs::remove_dir_all(&dir);
         let original_home = std::env::var("HOME").ok();
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()); }
