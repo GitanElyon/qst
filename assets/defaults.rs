@@ -8,6 +8,7 @@ AppConfig {
         favorite_key: Some(String::from("alt+f")),
         jump_to_top_key: Some(String::from("alt+up")),
         jump_to_bottom_key: Some(String::from("alt+down")),
+        debug_key: Some(String::from("ctrl+d")),
         clipboard_command: None,
         log_level: None,
     },

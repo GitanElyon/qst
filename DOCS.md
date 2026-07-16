@@ -53,7 +53,9 @@ qst also supports launch-time flags:
   - Print the CLI help text.
 - `--log-level <level>`
   - Set the log level: `debug`, `info`, `warn`, or `error` (default: `info`). Overrides `cargo.toml` log level.
--  `-v, --version`
+- `--debug-overlay`
+  - Start with the debug overlay visible.
+- `-v, --version`
   - Print the qst version.
 
 `--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
@@ -98,6 +100,30 @@ Valid values: `debug`, `info`, `warn`, `error`.
 
 Each session starts with a fresh `qst.log`. The previous session's log is automatically archived to `~/.local/state/qst/sessions/<YYYY-MM-DD_HH-MM-SS>.log` on startup.
 
+## Debug overlay
+
+Press `Ctrl+d` (or your configured `debug_key`) to toggle a single-line diagnostic bar at the top of the TUI:
+
+```
+FPS: 60 | Frame: 16.5ms | Entries: 42 | Events: 1234
+```
+
+| Field | Description |
+|---|---|
+| FPS | Rolling 1-second window of frame rate |
+| Frame | Milliseconds since the last frame |
+| Entries | Number of entries currently visible in the list |
+| Events | Total key press events processed this session |
+
+The keybinding is configurable in `~/.config/qst/config.toml`:
+
+```toml
+[general]
+debug_key = "ctrl+d"
+```
+
+Use the `--debug-overlay` flag to start with it enabled.
+
 ## Important defaults
 
 From `[features]` in `config.toml`:
@@ -133,6 +159,7 @@ Behavior:
 - `Alt+Up`: jump to first item
 - `Alt+Down`: jump to last item
 - `Enter`: launch/open selected item
+- `Ctrl+d`: toggle debug overlay
 - `Esc`: quit
 
 ## Plugin integration notes

@@ -123,6 +123,7 @@ impl AppConfig {
         validate_key_binding("general.favorite_key", self.general.favorite_key.as_deref(), &mut warnings);
         validate_key_binding("general.jump_to_top_key", self.general.jump_to_top_key.as_deref(), &mut warnings);
         validate_key_binding("general.jump_to_bottom_key", self.general.jump_to_bottom_key.as_deref(), &mut warnings);
+        validate_key_binding("general.debug_key", self.general.debug_key.as_deref(), &mut warnings);
 
         for w in &warnings {
             warn!("{w}");
@@ -257,6 +258,7 @@ pub struct GeneralConfig {
     pub favorite_key: Option<String>,
     pub jump_to_top_key: Option<String>,
     pub jump_to_bottom_key: Option<String>,
+    pub debug_key: Option<String>,
     pub clipboard_command: Option<String>,
     pub log_level: Option<String>,
 }
@@ -271,6 +273,7 @@ impl Default for GeneralConfig {
             favorite_key: Some(String::from("alt+f")),
             jump_to_top_key: Some(String::from("alt+up")),
             jump_to_bottom_key: Some(String::from("alt+down")),
+            debug_key: Some(String::from("ctrl+d")),
             clipboard_command: None,
             log_level: None,
         }

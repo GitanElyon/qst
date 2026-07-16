@@ -70,6 +70,7 @@ qst --program <program>   # launches the first result of the query
 qst --script <script>     # opens the script on startup
 qst --list-programs       # lists available programs
 qst --list-scripts        # lets available scripts
+qst --debug-overlay       # start with the debug overlay visible
 qst --log-level debug     # set log level: debug, info, warn, error (default: info)
 ```
 
@@ -89,6 +90,7 @@ bind = $mod, space, exec, [float; size 350 400] $terminal -e qst
 - `Enter`: launch/open selected item
 - `Esc`: quit
 - `Alt+f`: toggle favorite
+- `Ctrl+d`: toggle debug overlay
 
 ## Logging
 
@@ -112,6 +114,25 @@ Default level is `INFO`. Configure via `--log-level <level>` flag or `log_level`
 ### Session history
 
 Each qst session starts fresh. The previous session's log is moved to `~/.local/state/qst/sessions/<timestamp>.log` automatically.
+
+## Debug overlay
+
+Press `Ctrl+d` (or your configured `debug_key`) to toggle a diagnostic bar at the top of the TUI:
+
+```
+FPS: 60 | Frame: 16.5ms | Entries: 42 | Events: 1234
+```
+
+Shows real-time FPS, frame render time, current entry count, and total key events this session.
+
+The keybinding can be customized in `~/.config/qst/config.toml`:
+
+```toml
+[general]
+debug_key = "ctrl+d"
+```
+
+Start with the overlay enabled via `--debug-overlay`.
 
 ## Config files
 

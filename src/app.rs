@@ -7,7 +7,7 @@ use ratatui::widgets::ListState;
 use rustls::{ClientConfig, ClientConnection, Stream};
 use rustls_graviola;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
     io::{self, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -143,13 +143,18 @@ pub struct App {
     pub qst_ascii: String,
     pub hide_entries_until_typing: bool,
     pub fuzzy_matching_enabled: bool,
+    pub show_debug: bool,
+    pub frame_times: VecDeque<Instant>,
+    pub debug_fps: f64,
+    pub debug_frame_ms: f64,
+    pub total_events: u64,
     scripts: Vec<ScriptPlugin>,
 }
 
 impl App {
     const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
-    pub fn new(config: AppConfig, status_message: Option<String>) -> Self {
+    pub fn new(config: AppConfig, status_message: Option<String>, show_debug: bool) -> Self {
         Self::ensure_loader_script_installed();
         let (mut script_aliases, mut app_aliases) = Self::load_aliases();
         let history = History::load();
@@ -202,12 +207,21 @@ impl App {
             qst_ascii,
             hide_entries_until_typing: false,
             fuzzy_matching_enabled: true,
+            show_debug,
+            frame_times: VecDeque::with_capacity(120),
+            debug_fps: 0.0,
+            debug_frame_ms: 0.0,
+            total_events: 0,
             scripts,
         };
 
         app.sort_entries();
         app.filtered_entries = app.entries.clone();
         app
+    }
+
+    pub fn toggle_debug(&mut self) {
+        self.show_debug = !self.show_debug;
     }
 
     pub fn script_listings(&self) -> Vec<ScriptListing> {
@@ -2235,6 +2249,11 @@ mod tests {
             qst_ascii: String::new(),
             hide_entries_until_typing: false,
             fuzzy_matching_enabled: true,
+            show_debug: false,
+            frame_times: VecDeque::new(),
+            debug_fps: 0.0,
+            debug_frame_ms: 0.0,
+            total_events: 0,
             scripts: Vec::new(),
         }
     }

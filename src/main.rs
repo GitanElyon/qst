@@ -39,6 +39,7 @@ struct CliOptions {
     shy: bool,
     no_fuzzy: bool,
     log_level: Option<String>,
+    debug_overlay: bool,
     action: CliAction,
 }
 
@@ -100,7 +101,7 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    let mut app = App::new(load_result.config, load_result.warning);
+    let mut app = App::new(load_result.config, load_result.warning, options.debug_overlay);
     app.hide_entries_until_typing = options.shy;
     app.fuzzy_matching_enabled = !options.no_fuzzy;
 
@@ -152,6 +153,8 @@ fn main() -> Result<()> {
         if let Event::Key(key) = event::read()? {
             debug!("Key event: {:?}", key);
             if key.kind == KeyEventKind::Press {
+                app.total_events += 1;
+
                 if matches_key(&key, app.config.general.jump_to_top_key.as_deref().unwrap_or("alt+up")) {
                     app.select_first();
                     continue;
@@ -170,6 +173,9 @@ fn main() -> Result<()> {
                     KeyCode::Right => app.move_search_cursor_right(),
                     _ if matches_key(&key, app.config.general.favorite_key.as_deref().unwrap_or("alt+f")) => {
                         app.toggle_favorite();
+                    }
+                    _ if matches_key(&key, app.config.general.debug_key.as_deref().unwrap_or("ctrl+d")) => {
+                        app.toggle_debug();
                     }
                     KeyCode::Backspace => app.backspace_search_char(),
                     KeyCode::Char(c) => app.insert_search_char(c),
@@ -198,6 +204,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
     let mut shy = false;
     let mut no_fuzzy = false;
     let mut log_level = None;
+    let mut debug_overlay = false;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -241,6 +248,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
                 };
                 log_level = Some(value);
             }
+            "--debug-overlay" => debug_overlay = true,
             _ => {}
         }
     }
@@ -251,6 +259,7 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
         shy,
         no_fuzzy,
         log_level,
+        debug_overlay,
         action: action.unwrap_or(CliAction::Interactive),
     })
 }
@@ -320,6 +329,7 @@ fn print_help() {
     println!("  --list-programs         Print all launchable programs");
     println!("  --list-scripts          Print all scripts and their metadata");
     println!("  -v, --version           Print version information");
+    println!("  --debug-overlay         Start with the debug overlay visible");
     println!("  --log-level <level>     Set log level: debug, info, warn, error (default: info)");
     println!("  -h, --help              Print this help message");
 }
