@@ -3,7 +3,7 @@ use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use crossterm::execute;
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::backtrace::Backtrace;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::panic;
@@ -12,6 +12,38 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+const RING_BUF_CAPACITY: usize = 1000;
+
+struct RingBuffer {
+    buffer: VecDeque<String>,
+    capacity: usize,
+}
+
+impl RingBuffer {
+    fn new(capacity: usize) -> Self {
+        RingBuffer {
+            buffer: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn push(&mut self, entry: String) {
+        if self.buffer.len() >= self.capacity {
+            self.buffer.pop_front();
+        }
+        self.buffer.push_back(entry);
+    }
+
+    fn drain(&mut self) -> Vec<String> {
+        self.buffer.drain(..).collect()
+    }
+}
+
+fn ring_buffer() -> &'static Mutex<RingBuffer> {
+    static RB: OnceLock<Mutex<RingBuffer>> = OnceLock::new();
+    RB.get_or_init(|| Mutex::new(RingBuffer::new(RING_BUF_CAPACITY)))
+}
 
 pub struct QstLogger {
     file: Mutex<File>,
@@ -71,6 +103,10 @@ impl Log for QstLogger {
 
         let log_line =
             format!("[{}] [{}] [{}:{}] {}\n", timestamp, level, file, line, args);
+
+        if let Ok(mut ring) = ring_buffer().lock() {
+            ring.push(log_line.clone());
+        }
 
         if let Ok(mut file) = self.file.lock() {
             let _ = file.write_all(log_line.as_bytes());
@@ -133,6 +169,20 @@ pub fn install_panic_hook() {
             if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
                 let _ = file.write_all(details.as_bytes());
                 let _ = file.flush();
+            }
+
+            if let Some(crash_dir) = path.parent() {
+                let crash_path = crash_dir.join("crash.log");
+                if let Ok(mut crash) = OpenOptions::new().create(true).append(true).open(&crash_path) {
+                    let _ = crash.write_all(details.as_bytes());
+                    let _ = crash.write_all(b"--- Flight Recorder ---\n");
+                    if let Ok(mut ring) = ring_buffer().lock() {
+                        for entry in ring.drain() {
+                            let _ = crash.write_all(entry.as_bytes());
+                        }
+                    }
+                    let _ = crash.flush();
+                }
             }
         }
 
