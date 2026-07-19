@@ -1,12 +1,13 @@
 use crate::config::AppConfig;
 use crate::history::History;
 use dirs::config_dir;
+use log::{debug, error, info, warn};
 use freedesktop_desktop_entry::{Iter, default_paths, get_languages_from_env};
 use ratatui::widgets::ListState;
 use rustls::{ClientConfig, ClientConnection, Stream};
 use rustls_graviola;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
     io::{self, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -142,19 +143,26 @@ pub struct App {
     pub qst_ascii: String,
     pub hide_entries_until_typing: bool,
     pub fuzzy_matching_enabled: bool,
+    pub show_debug: bool,
+    pub frame_times: VecDeque<Instant>,
+    pub debug_fps: f64,
+    pub debug_frame_ms: f64,
+    pub total_events: u64,
     scripts: Vec<ScriptPlugin>,
 }
 
 impl App {
     const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
-    pub fn new(config: AppConfig, status_message: Option<String>) -> Self {
+    pub fn new(config: AppConfig, status_message: Option<String>, show_debug: bool) -> Self {
         Self::ensure_loader_script_installed();
         let (mut script_aliases, mut app_aliases) = Self::load_aliases();
         let history = History::load();
         let scripts = Self::load_scripts(&mut script_aliases);
+        info!("Loaded {} scripts", scripts.len());
         
         let mut entries = scan_desktop_files(config.features.show_duplicates);
+        info!("Loaded {} desktop entries", entries.len());
         
         if !config.features.show_duplicates {
             let alias_keys: Vec<String> = app_aliases.keys().map(|k| k.to_lowercase()).collect();
@@ -199,12 +207,21 @@ impl App {
             qst_ascii,
             hide_entries_until_typing: false,
             fuzzy_matching_enabled: true,
+            show_debug,
+            frame_times: VecDeque::with_capacity(120),
+            debug_fps: 0.0,
+            debug_frame_ms: 0.0,
+            total_events: 0,
             scripts,
         };
 
         app.sort_entries();
         app.filtered_entries = app.entries.clone();
         app
+    }
+
+    pub fn toggle_debug(&mut self) {
+        self.show_debug = !self.show_debug;
     }
 
     pub fn script_listings(&self) -> Vec<ScriptListing> {
@@ -246,6 +263,7 @@ impl App {
             return Err(format!("Program '{}' has no launch command", entry.name));
         };
 
+        info!("Launching program: {} (cmd: {}, args: {:?})", entry.name, cmd, args);
         let launch_args = self.build_exec_args(args, None);
         self.spawn_command(cmd, launch_args, &entry.name)
     }
@@ -719,7 +737,9 @@ impl App {
         if self.mode == AppMode::AppSelection {
             if let Some(i) = self.list_state.selected() {
                 if let Some(entry) = self.filtered_entries.get(i).cloned() {
+                    let is_fav = self.history.is_favorite(&entry.name);
                     self.history.toggle_favorite(&entry.name);
+                    debug!("Toggled favorite for {} (now: {})", entry.name, !is_fav);
                     self.sort_entries();
                     self.update_filter();
                 }
@@ -832,6 +852,8 @@ impl App {
             AppMode::FileSelection => self.filtered_files.len(),
             AppMode::ScriptResults => self.script_items.len(),
         };
+
+        debug!("Filter updated: mode={:?}, count={}", self.mode, count);
 
         if count == 0 {
             self.list_state.select(None);
@@ -1053,11 +1075,13 @@ impl App {
 
         match command.spawn() {
             Ok(_) => {
+                info!("Launched {}", entry_name);
                 self.should_quit = true;
                 self.status_message = None;
                 Ok(())
             }
             Err(err) => {
+                error!("Failed to launch {}: {}", entry_name, err);
                 self.status_message =
                     Some(format!("Failed to launch {}: {}", entry_name, err));
                 Err(err.to_string())
@@ -1098,10 +1122,12 @@ impl App {
 
         match command.spawn() {
             Ok(_) => {
+                info!("Opened {}", path_str);
                 self.should_quit = true;
                 self.status_message = None;
             }
             Err(err) => {
+                error!("Failed to open {}: {}", path_str, err);
                 self.status_message = Some(format!("Failed to open {}: {}", path_str, err));
             }
         }
@@ -1536,8 +1562,10 @@ impl App {
         self.filtered_files.clear();
         self.mode = AppMode::ScriptResults;
 
+        info!("Running script: {} (payload: {})", script.id, payload);
         match self.run_script(&script, &payload) {
             Ok((title, message, meta, items)) => {
+                debug!("Script {} returned {} items", script.id, items.len());
                 self.script_meta = meta.clone();
                 self.script_title = title
                     .or_else(|| meta.and_then(|meta| meta.name).map(|name| format!(" {} ", name)))
@@ -1546,6 +1574,7 @@ impl App {
                 self.status_message = message;
             }
             Err(err) => {
+                error!("Script {} failed: {}", script.id, err);
                 self.script_meta = None;
                 self.script_title = Some(format!(" {} ", script.id));
                 self.script_items = vec![ScriptItem {
@@ -1643,6 +1672,7 @@ impl App {
                 Some(status) => break status,
                 None => {
                     if start.elapsed() >= timeout {
+                        warn!("Script {} timed out after {:?}", script.id, timeout);
                         let _ = child.kill();
                         let _ = child.wait();
                         let _ = stdout_handle.join();
@@ -1659,8 +1689,10 @@ impl App {
         if !status.success() {
             let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
             if stderr.is_empty() {
+                warn!("Script {} exited with code {:?}", script.id, status.code());
                 return Err(format!("exit code {:?}", status.code()));
             }
+            warn!("Script {} stderr: {}", script.id, stderr);
             return Err(stderr);
         }
 
@@ -1865,6 +1897,10 @@ impl App {
                     }
                     continue;
                 }
+                if let Some(value) = directive.strip_prefix("log ") {
+                    crate::logger::plugin_log(script_id, value.trim());
+                    continue;
+                }
                 continue;
             }
 
@@ -2008,10 +2044,12 @@ impl App {
                 }
                 ScriptAction::CopyToClipboard => match self.copy_to_clipboard(&item.value) {
                     Ok(()) => {
+                        debug!("Copied value to clipboard");
                         self.status_message = Some("Copied to clipboard".to_string());
                         true
                     }
                     Err(err) => {
+                        error!("Clipboard failed: {}", err);
                         self.status_message = Some(format!("Clipboard failed: {}", err));
                         false
                     }
@@ -2026,11 +2064,13 @@ impl App {
                 }
                 ScriptAction::Execute => match Self::spawn_shell_command(&item.value) {
                     Ok(child) => {
+                        info!("Executing shell command: {}", item.value);
                         pending_execute = Some(child);
                         self.status_message = None;
                         true
                     }
                     Err(err) => {
+                        error!("Failed to execute command ({}): {}", item.value, err);
                         self.status_message = Some(format!("Failed to execute command: {}", err));
                         false
                     }
@@ -2209,6 +2249,11 @@ mod tests {
             qst_ascii: String::new(),
             hide_entries_until_typing: false,
             fuzzy_matching_enabled: true,
+            show_debug: false,
+            frame_times: VecDeque::new(),
+            debug_fps: 0.0,
+            debug_frame_ms: 0.0,
+            total_events: 0,
             scripts: Vec::new(),
         }
     }
@@ -2270,6 +2315,15 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].title, fuzzy_item.title);
         assert_eq!(filtered[1].title, plain_item.title);
+    }
+
+    #[test]
+    fn parse_script_output_ignores_log_directive_and_continues_parsing() {
+        let output = "qst! title Test\nqst! log some debug info\nHello|world\n";
+        let (_title, _message, _meta, items) = App::parse_script_output(output, "", "test_logger", true);
+        assert_eq!(items.len(), 1, "log directive should not suppress item parsing");
+        assert_eq!(items[0].title, "Hello");
+        assert_eq!(items[0].value, "world");
     }
 
     #[test]

@@ -2,14 +2,31 @@ use crate::{
     app::{App, AppMode},
     config::TextAlignment,
 };
+use log::debug;
 use ratatui::{
     prelude::*,
     text::{Line, Span, Text},
     widgets::{Clear, List, ListItem, Paragraph},
 };
 use std::f32::consts::PI;
+use std::time::Instant;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    debug!("Drawing frame");
+
+    let now = Instant::now();
+    app.frame_times.push_back(now);
+    let cutoff = now - std::time::Duration::from_secs(1);
+    while app.frame_times.front().map_or(false, |t| *t < cutoff) {
+        app.frame_times.pop_front();
+    }
+    app.debug_fps = app.frame_times.len() as f64;
+    if app.frame_times.len() >= 2 {
+        app.debug_frame_ms = app.frame_times[app.frame_times.len() - 1]
+            .duration_since(app.frame_times[app.frame_times.len() - 2])
+            .as_secs_f64() * 1000.0;
+    }
+
     let area = f.area();
     let config = &app.config;
     let general = &config.general;
@@ -34,6 +51,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     let mut constraints = Vec::new();
+
+    if app.show_debug {
+        constraints.push(Constraint::Length(1));
+    }
     
     let qst_lines = app.qst_ascii.lines().count() as u16;
 
@@ -56,6 +77,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(working_area);
 
     let mut chunk_index = 0;
+
+    if app.show_debug {
+        let chunk = chunks[chunk_index];
+        chunk_index += 1;
+        let debug_text = format!(
+            "FPS: {:.0} | Frame: {:.1}ms | Entries: {} | Events: {}",
+            app.debug_fps,
+            app.debug_frame_ms,
+            app.filtered_entries.len(),
+            app.total_events,
+        );
+        let debug_widget = Paragraph::new(debug_text)
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(debug_widget, chunk);
+    }
 
     if config.qst_ascii.section.is_visible() {
         let chunk = chunks[chunk_index];

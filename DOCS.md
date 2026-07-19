@@ -51,10 +51,90 @@ qst also supports launch-time flags:
   - Generate `~/.config/qst/config.toml` or the file given by `--config`.
 - `-h, --help`
   - Print the CLI help text.
--  `-v, --version`
+- `--log-level <level>`
+  - Set the log level: `debug`, `info`, `warn`, or `error` (default: `info`). Overrides `cargo.toml` log level.
+- `--debug-overlay`
+  - Start with the debug overlay visible.
+- `-v, --version`
   - Print the qst version.
 
 `--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
+
+## Logging
+
+Logs are written to `~/.local/state/qst/qst.log` in the format:
+
+```
+[2024-06-15 10:30:45.123] [INFO] [src/app.rs:127] message
+```
+
+### Log levels
+
+| Level | Config value | Purpose |
+|---|---|---|
+| `DEBUG` | `debug` | All actions, every user movement, click, and render |
+| `INFO` | `info` | When scripts are loaded or actions are taken |
+| `WARN` | `warn` | Minor errors like a script having a parsing problem |
+| `ERROR` | `error` | When a script won't load or the app crashes |
+
+Default: `info`.
+
+### Configuration
+
+The log level can be set via the config file in the `[general]` section:
+
+```toml
+[general]
+log_level = "debug"
+```
+
+Or via the `--log-level` CLI flag, which takes precedence over the config file:
+
+```bash
+qst --log-level debug
+```
+
+Valid values: `debug`, `info`, `warn`, `error`.
+
+### Session rotation
+
+Each session starts with a fresh `qst.log`. The previous session's log is automatically archived to `~/.local/state/qst/sessions/<YYYY-MM-DD_HH-MM-SS>.log` on startup.
+
+### Session cleanup
+
+Archived session logs older than `log_retention_days` are automatically pruned on each startup. This applies to both the main sessions directory and per-plugin session directories.
+
+Configured in `~/.config/qst/config.toml`:
+
+```toml
+[general]
+log_retention_days = 30   # default: keep 30 days of archived sessions
+log_retention_days = 0    # disable cleanup entirely
+```
+
+## Debug overlay
+
+Press `Ctrl+d` (or your configured `debug_key`) to toggle a single-line diagnostic bar at the top of the TUI:
+
+```
+FPS: 60 | Frame: 16.5ms | Entries: 42 | Events: 1234
+```
+
+| Field | Description |
+|---|---|
+| FPS | Rolling 1-second window of frame rate |
+| Frame | Milliseconds since the last frame |
+| Entries | Number of entries currently visible in the list |
+| Events | Total key press events processed this session |
+
+The keybinding is configurable in `~/.config/qst/config.toml`:
+
+```toml
+[general]
+debug_key = "ctrl+d"
+```
+
+Use the `--debug-overlay` flag to start with it enabled.
 
 ## Important defaults
 
@@ -91,6 +171,7 @@ Behavior:
 - `Alt+Up`: jump to first item
 - `Alt+Down`: jump to last item
 - `Enter`: launch/open selected item
+- `Ctrl+d`: toggle debug overlay
 - `Esc`: quit
 
 ## Plugin integration notes

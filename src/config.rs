@@ -7,6 +7,7 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use log::{info, warn};
 
 pub struct ConfigLoadResult {
     pub config: AppConfig,
@@ -53,6 +54,7 @@ impl AppConfig {
             match fs::read_to_string(&config_path) {
                 Ok(contents) => match toml::from_str::<AppConfig>(&contents) {
                     Ok(parsed) => {
+                        info!("Configuration loaded from {:?}", config_path);
                         let validation_warnings = parsed.validation_warnings();
                         if !validation_warnings.is_empty() {
                             let validation_warning = validation_warnings.join("\n");
@@ -121,6 +123,11 @@ impl AppConfig {
         validate_key_binding("general.favorite_key", self.general.favorite_key.as_deref(), &mut warnings);
         validate_key_binding("general.jump_to_top_key", self.general.jump_to_top_key.as_deref(), &mut warnings);
         validate_key_binding("general.jump_to_bottom_key", self.general.jump_to_bottom_key.as_deref(), &mut warnings);
+        validate_key_binding("general.debug_key", self.general.debug_key.as_deref(), &mut warnings);
+
+        for w in &warnings {
+            warn!("{w}");
+        }
 
         warnings
     }
@@ -251,7 +258,10 @@ pub struct GeneralConfig {
     pub favorite_key: Option<String>,
     pub jump_to_top_key: Option<String>,
     pub jump_to_bottom_key: Option<String>,
+    pub debug_key: Option<String>,
     pub clipboard_command: Option<String>,
+    pub log_level: Option<String>,
+    pub log_retention_days: Option<u64>,
 }
 
 impl Default for GeneralConfig {
@@ -264,7 +274,10 @@ impl Default for GeneralConfig {
             favorite_key: Some(String::from("alt+f")),
             jump_to_top_key: Some(String::from("alt+up")),
             jump_to_bottom_key: Some(String::from("alt+down")),
+            debug_key: Some(String::from("ctrl+d")),
             clipboard_command: None,
+            log_level: None,
+            log_retention_days: Some(30),
         }
     }
 }
