@@ -62,7 +62,7 @@ fn main() -> Result<()> {
                 .unwrap_or(log::LevelFilter::Info)
         });
 
-    logger::QstLogger::initialize(log_level)?;
+    logger::QstLogger::initialize(log_level, load_result.config.general.log_retention_days)?;
     logger::install_panic_hook();
     info!("qst v{} starting", env!("CARGO_PKG_VERSION"));
 

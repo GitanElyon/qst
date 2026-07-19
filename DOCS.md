@@ -100,6 +100,18 @@ Valid values: `debug`, `info`, `warn`, `error`.
 
 Each session starts with a fresh `qst.log`. The previous session's log is automatically archived to `~/.local/state/qst/sessions/<YYYY-MM-DD_HH-MM-SS>.log` on startup.
 
+### Session cleanup
+
+Archived session logs older than `log_retention_days` are automatically pruned on each startup. This applies to both the main sessions directory and per-plugin session directories.
+
+Configured in `~/.config/qst/config.toml`:
+
+```toml
+[general]
+log_retention_days = 30   # default: keep 30 days of archived sessions
+log_retention_days = 0    # disable cleanup entirely
+```
+
 ## Debug overlay
 
 Press `Ctrl+d` (or your configured `debug_key`) to toggle a single-line diagnostic bar at the top of the TUI:

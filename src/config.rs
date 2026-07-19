@@ -261,6 +261,7 @@ pub struct GeneralConfig {
     pub debug_key: Option<String>,
     pub clipboard_command: Option<String>,
     pub log_level: Option<String>,
+    pub log_retention_days: Option<u64>,
 }
 
 impl Default for GeneralConfig {
@@ -276,6 +277,7 @@ impl Default for GeneralConfig {
             debug_key: Some(String::from("ctrl+d")),
             clipboard_command: None,
             log_level: None,
+            log_retention_days: Some(30),
         }
     }
 }

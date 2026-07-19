@@ -10,6 +10,7 @@ use std::panic;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::SystemTime;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -51,7 +52,7 @@ pub struct QstLogger {
 }
 
 impl QstLogger {
-    pub fn initialize(level: LevelFilter) -> Result<(), SetLoggerError> {
+    pub fn initialize(level: LevelFilter, retention_days: Option<u64>) -> Result<(), SetLoggerError> {
         let log_path = get_log_path();
         let _ = LOG_PATH.set(log_path.clone());
         let sessions_dir = get_sessions_dir();
@@ -66,6 +67,8 @@ impl QstLogger {
             let session_path = sessions_dir.join(format!("{}.log", timestamp));
             let _ = fs::rename(&log_path, &session_path);
         }
+
+        cleanup_old_sessions(retention_days);
 
         let file = OpenOptions::new()
             .create(true)
@@ -129,6 +132,63 @@ fn get_log_path() -> PathBuf {
 fn get_sessions_dir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
     home.join(".local/state/qst/sessions")
+}
+
+fn cleanup_old_sessions(retention_days: Option<u64>) {
+    let Some(days) = retention_days.filter(|d| *d > 0) else {
+        return;
+    };
+
+    let cutoff = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(days * 86400);
+
+    let sessions_dir = get_sessions_dir();
+    if let Ok(entries) = fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(true, |e| e != "log") {
+                continue;
+            }
+            if let Ok(metadata) = fs::metadata(&path) {
+                if let Ok(mtime) = metadata.modified() {
+                    if let Ok(duration) = mtime.duration_since(SystemTime::UNIX_EPOCH) {
+                        if duration.as_secs() < cutoff {
+                            let _ = fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let qst_dir = get_plugin_log_dir();
+    if let Ok(entries) = fs::read_dir(&qst_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.file_name().map_or(false, |n| n.to_string_lossy().ends_with("_sessions")) {
+                if let Ok(dir_entries) = fs::read_dir(&path) {
+                    for file_entry in dir_entries.flatten() {
+                        let file_path = file_entry.path();
+                        if file_path.extension().map_or(true, |e| e != "log") {
+                            continue;
+                        }
+                        if let Ok(metadata) = fs::metadata(&file_path) {
+                            if let Ok(mtime) = metadata.modified() {
+                                if let Ok(duration) = mtime.duration_since(SystemTime::UNIX_EPOCH) {
+                                    if duration.as_secs() < cutoff {
+                                        let _ = fs::remove_file(&file_path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn parse_log_level(value: &str) -> LevelFilter {

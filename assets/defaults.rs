@@ -11,6 +11,7 @@ AppConfig {
         debug_key: Some(String::from("ctrl+d")),
         clipboard_command: None,
         log_level: None,
+        log_retention_days: Some(30),
     },
     features: FeaturesConfig {
         enable_file_explorer: true,
