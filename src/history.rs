@@ -37,10 +37,10 @@ impl History {
             path.push("qst");
             if fs::create_dir_all(&path).is_ok() {
                 path.push("history.toml");
-                if let Ok(content) = toml::to_string(self) {
-                    if fs::write(&path, content).is_ok() {
-                        debug!("History saved to {:?} ({} apps)", path, self.usage.len());
-                    }
+                if let Ok(content) = toml::to_string(self)
+                    && fs::write(&path, content).is_ok()
+                {
+                    debug!("History saved to {:?} ({} apps)", path, self.usage.len());
                 }
             }
         }

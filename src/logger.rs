@@ -1,6 +1,6 @@
 use chrono::Local;
-use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::backtrace::Backtrace;
 use std::collections::{HashSet, VecDeque};
@@ -52,7 +52,10 @@ pub struct QstLogger {
 }
 
 impl QstLogger {
-    pub fn initialize(level: LevelFilter, retention_days: Option<u64>) -> Result<(), SetLoggerError> {
+    pub fn initialize(
+        level: LevelFilter,
+        retention_days: Option<u64>,
+    ) -> Result<(), SetLoggerError> {
         let log_path = get_log_path();
         let _ = LOG_PATH.set(log_path.clone());
         let sessions_dir = get_sessions_dir();
@@ -104,8 +107,7 @@ impl Log for QstLogger {
         let line = record.line().unwrap_or(0);
         let args = record.args();
 
-        let log_line =
-            format!("[{}] [{}] [{}:{}] {}\n", timestamp, level, file, line, args);
+        let log_line = format!("[{}] [{}] [{}:{}] {}\n", timestamp, level, file, line, args);
 
         if let Ok(mut ring) = ring_buffer().lock() {
             ring.push(log_line.clone());
@@ -149,17 +151,15 @@ fn cleanup_old_sessions(retention_days: Option<u64>) {
     if let Ok(entries) = fs::read_dir(&sessions_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(true, |e| e != "log") {
+            if path.extension().is_none_or(|e| e != "log") {
                 continue;
             }
-            if let Ok(metadata) = fs::metadata(&path) {
-                if let Ok(mtime) = metadata.modified() {
-                    if let Ok(duration) = mtime.duration_since(SystemTime::UNIX_EPOCH) {
-                        if duration.as_secs() < cutoff {
-                            let _ = fs::remove_file(&path);
-                        }
-                    }
-                }
+            if let Ok(metadata) = fs::metadata(&path)
+                && let Ok(mtime) = metadata.modified()
+                && let Ok(duration) = mtime.duration_since(SystemTime::UNIX_EPOCH)
+                && duration.as_secs() < cutoff
+            {
+                let _ = fs::remove_file(&path);
             }
         }
     }
@@ -168,22 +168,23 @@ fn cleanup_old_sessions(retention_days: Option<u64>) {
     if let Ok(entries) = fs::read_dir(&qst_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.file_name().map_or(false, |n| n.to_string_lossy().ends_with("_sessions")) {
-                if let Ok(dir_entries) = fs::read_dir(&path) {
-                    for file_entry in dir_entries.flatten() {
-                        let file_path = file_entry.path();
-                        if file_path.extension().map_or(true, |e| e != "log") {
-                            continue;
-                        }
-                        if let Ok(metadata) = fs::metadata(&file_path) {
-                            if let Ok(mtime) = metadata.modified() {
-                                if let Ok(duration) = mtime.duration_since(SystemTime::UNIX_EPOCH) {
-                                    if duration.as_secs() < cutoff {
-                                        let _ = fs::remove_file(&file_path);
-                                    }
-                                }
-                            }
-                        }
+            if path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with("_sessions"))
+                && let Ok(dir_entries) = fs::read_dir(&path)
+            {
+                for file_entry in dir_entries.flatten() {
+                    let file_path = file_entry.path();
+                    if file_path.extension().is_none_or(|e| e != "log") {
+                        continue;
+                    }
+                    if let Ok(metadata) = fs::metadata(&file_path)
+                        && let Ok(mtime) = metadata.modified()
+                        && let Ok(duration) = mtime.duration_since(SystemTime::UNIX_EPOCH)
+                        && duration.as_secs() < cutoff
+                    {
+                        let _ = fs::remove_file(&file_path);
                     }
                 }
             }
@@ -233,7 +234,11 @@ pub fn install_panic_hook() {
 
             if let Some(crash_dir) = path.parent() {
                 let crash_path = crash_dir.join("crash.log");
-                if let Ok(mut crash) = OpenOptions::new().create(true).append(true).open(&crash_path) {
+                if let Ok(mut crash) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&crash_path)
+                {
                     let _ = crash.write_all(details.as_bytes());
                     let _ = crash.write_all(b"--- Flight Recorder ---\n");
                     if let Ok(mut ring) = ring_buffer().lock() {
@@ -309,11 +314,7 @@ pub fn plugin_log(plugin_id: &str, message: &str) {
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let log_line = format!("[{}] {}\n", timestamp, message);
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
         let _ = file.write_all(log_line.as_bytes());
         let _ = file.flush();
     }
@@ -336,12 +337,16 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         let original_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()); }
+        unsafe {
+            std::env::set_var("HOME", dir.to_str().unwrap());
+        }
         __test_reset_plugin_rotation();
         test(dir.clone());
         let _ = fs::remove_dir_all(&dir);
         if let Some(home) = original_home {
-            unsafe { std::env::set_var("HOME", home); }
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
         }
     }
 
@@ -352,12 +357,23 @@ mod tests {
             plugin_log(plugin_id, "hello from plugin");
             plugin_log(plugin_id, "second message");
 
-            let log_path = dir.join(".local/state/qst").join(format!("{}.log", plugin_id));
+            let log_path = dir
+                .join(".local/state/qst")
+                .join(format!("{}.log", plugin_id));
             let content = fs::read_to_string(&log_path).unwrap_or_else(|_| String::new());
 
-            assert!(content.contains("hello from plugin"), "log should contain first message");
-            assert!(content.contains("second message"), "log should contain second message");
-            assert!(content.starts_with('['), "log should start with timestamp bracket");
+            assert!(
+                content.contains("hello from plugin"),
+                "log should contain first message"
+            );
+            assert!(
+                content.contains("second message"),
+                "log should contain second message"
+            );
+            assert!(
+                content.starts_with('['),
+                "log should start with timestamp bracket"
+            );
         });
     }
 
@@ -377,8 +393,14 @@ mod tests {
             assert_eq!(entries.len(), 1, "one archived session should exist");
 
             let content = fs::read_to_string(&log_path).unwrap();
-            assert!(content.contains("new session message"), "new log should have new message");
-            assert!(!content.contains("old data"), "new log should not have old data");
+            assert!(
+                content.contains("new session message"),
+                "new log should have new message"
+            );
+            assert!(
+                !content.contains("old data"),
+                "new log should not have old data"
+            );
         });
     }
 }

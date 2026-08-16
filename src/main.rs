@@ -4,21 +4,21 @@ mod history;
 mod logger;
 mod ui;
 
+use crate::history::History;
 use crate::{app::App, config::AppConfig, ui::draw};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::prelude::*;
 use dirs::config_dir;
-use crate::history::History;
+use log::{debug, info, warn};
+use ratatui::prelude::*;
+use std::env;
 use std::fs;
 use std::io;
-use std::env;
 use std::path::{Path, PathBuf};
-use log::{debug, info, warn};
 
 enum CliAction {
     Interactive,
@@ -101,7 +101,11 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    let mut app = App::new(load_result.config, load_result.warning, options.debug_overlay);
+    let mut app = App::new(
+        load_result.config,
+        load_result.warning,
+        options.debug_overlay,
+    );
     app.hide_entries_until_typing = options.shy;
     app.fuzzy_matching_enabled = !options.no_fuzzy;
 
@@ -137,7 +141,11 @@ fn main() -> Result<()> {
             app.launch_script_mode(&script_name)
                 .map_err(anyhow::Error::msg)?;
         }
-        CliAction::Help | CliAction::Version | CliAction::GenerateConfig | CliAction::ClearHistory | CliAction::ClearFavorites => unreachable!(),
+        CliAction::Help
+        | CliAction::Version
+        | CliAction::GenerateConfig
+        | CliAction::ClearHistory
+        | CliAction::ClearFavorites => unreachable!(),
     }
 
     enable_raw_mode()?;
@@ -155,11 +163,25 @@ fn main() -> Result<()> {
             if key.kind == KeyEventKind::Press {
                 app.total_events += 1;
 
-                if matches_key(&key, app.config.general.jump_to_top_key.as_deref().unwrap_or("alt+up")) {
+                if matches_key(
+                    &key,
+                    app.config
+                        .general
+                        .jump_to_top_key
+                        .as_deref()
+                        .unwrap_or("alt+up"),
+                ) {
                     app.select_first();
                     continue;
                 }
-                if matches_key(&key, app.config.general.jump_to_bottom_key.as_deref().unwrap_or("alt+down")) {
+                if matches_key(
+                    &key,
+                    app.config
+                        .general
+                        .jump_to_bottom_key
+                        .as_deref()
+                        .unwrap_or("alt+down"),
+                ) {
                     app.select_last();
                     continue;
                 }
@@ -171,10 +193,22 @@ fn main() -> Result<()> {
                     KeyCode::Down => app.move_selection(1),
                     KeyCode::Left => app.move_search_cursor_left(),
                     KeyCode::Right => app.move_search_cursor_right(),
-                    _ if matches_key(&key, app.config.general.favorite_key.as_deref().unwrap_or("alt+f")) => {
+                    _ if matches_key(
+                        &key,
+                        app.config
+                            .general
+                            .favorite_key
+                            .as_deref()
+                            .unwrap_or("alt+f"),
+                    ) =>
+                    {
                         app.toggle_favorite();
                     }
-                    _ if matches_key(&key, app.config.general.debug_key.as_deref().unwrap_or("ctrl+d")) => {
+                    _ if matches_key(
+                        &key,
+                        app.config.general.debug_key.as_deref().unwrap_or("ctrl+d"),
+                    ) =>
+                    {
                         app.toggle_debug();
                     }
                     KeyCode::Backspace => app.backspace_search_char(),
@@ -244,7 +278,9 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
             }
             "--log-level" => {
                 let Some(value) = args.next() else {
-                    return Err(anyhow!("--log-level requires a value (debug, info, warn, error)"));
+                    return Err(anyhow!(
+                        "--log-level requires a value (debug, info, warn, error)"
+                    ));
                 };
                 log_level = Some(value);
             }
@@ -276,10 +312,14 @@ fn set_cli_action(action: &mut Option<CliAction>, next: CliAction) -> Result<()>
 fn generate_default_config(config_path: Option<&Path>) -> Result<()> {
     let path = resolve_config_path(config_path)?;
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && fs::create_dir_all(parent).is_err() {
-            return Err(anyhow!("Unable to create configuration directory: {:?}", parent));
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && fs::create_dir_all(parent).is_err()
+    {
+        return Err(anyhow!(
+            "Unable to create configuration directory: {:?}",
+            parent
+        ));
     }
 
     if path.exists() {
@@ -317,7 +357,9 @@ fn print_help() {
     println!();
     println!("Options:");
     println!("  --config <path>         Use a config file from a custom path");
-    println!("  --gen-config            Generate a default config file at ~/.config/qst/config.toml");
+    println!(
+        "  --gen-config            Generate a default config file at ~/.config/qst/config.toml"
+    );
     println!("                          (Fails if file already exists)");
     println!("  --clear-history         Clear qst's app history");
     println!("  --clear-favorites       Clear qst's favorite apps");
@@ -385,7 +427,12 @@ fn parse_key_binding(config_str: &str) -> Option<(KeyModifiers, KeyCode)> {
     let mut required_modifiers = KeyModifiers::empty();
     let mut required_code = None;
 
-    for part in config_str.to_lowercase().split('+').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in config_str
+        .to_lowercase()
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         match part {
             "ctrl" | "control" => required_modifiers.insert(KeyModifiers::CONTROL),
             "alt" | "option" => required_modifiers.insert(KeyModifiers::ALT),
@@ -401,11 +448,8 @@ fn parse_key_binding(config_str: &str) -> Option<(KeyModifiers, KeyCode)> {
             "left" => required_code = Some(KeyCode::Left),
             "right" => required_code = Some(KeyCode::Right),
             s if s.len() == 1 => {
-                if let Some(ch) = s.chars().next() {
-                    required_code = Some(KeyCode::Char(ch));
-                } else {
-                    return None;
-                }
+                let ch = s.chars().next()?;
+                required_code = Some(KeyCode::Char(ch));
             }
             s if s.starts_with('f') && s.len() > 1 => {
                 if let Ok(n) = s[1..].parse::<u8>() {
