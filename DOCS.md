@@ -1,4 +1,4 @@
-# qst Docs
+# Qst Docs
 
 Here you will find documentation for qst features, configuration, and script integration.
 
@@ -178,7 +178,26 @@ Behavior:
 
 - qst is host/runtime.
 - Scripts live in `~/.config/qst/scripts/`.
-- Protocol, directives, and setup guidance are in `https://github.com/gitanelyon/awesome-qst`.
+- The script API protocol is documented in [API.md](API.md).
+- The script catalog and community scripts are in https://github.com/gitanelyon/awesome-qst.
+
+## Code architecture
+
+- `src/main.rs`
+  - Terminal lifecycle, event loop, key handling.
+- `src/app.rs`
+  - App state machine, filtering, file explorer, launch argument handling, command spawning.
+- `src/ui.rs`
+  - Rendering and list presentation.
+- `src/config.rs`
+  - `config.toml` loading and defaults.
+- `src/history.rs`
+  - App usage/favorites history persistence.
+
+Notable implementation points:
+
+- File explorer filtering lives in `App::update_filter` + `App::list_completions`.
+- Script protocol parsing lives in `App::parse_script_output`.
 
 ## XDG app scan paths
 
