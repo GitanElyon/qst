@@ -1,8 +1,8 @@
 # qst API
 
-This document describes the base qst launcher internals and how plugin packs integrate with it.
+This document describes the base qst launcher internals and how script packs integrate with it.
 
-Plugin scripts and community catalog are documented in `plugins/` and in:
+The script catalog and community scripts are documented in:
 
 - https://github.com/gitanelyon/awesome-qst
 
@@ -41,10 +41,10 @@ Implemented in `App::update_filter` + `App::list_completions`:
 - Tab completion in file-selection mode inserts selected paths.
 - If selected path is executable, qst runs it directly; otherwise it opens via `xdg-open`.
 
-## Plugin pack integration
+## Script pack integration
 
-- Plugin scripts are expected under `~/.config/qst/scripts/`.
+- Scripts are expected under `~/.config/qst/scripts/`.
 - Scripts may be executable files (run directly) or known extension files run via interpreter (`.sh`, `.bash`, `.zsh`, `.fish`, `.py`, `.pl`, `.rb`, `.js`, `.lua`).
 - Script and app aliases are loaded from `~/.config/qst/alias.toml`.
 
-For plugin implementation details and curated plugins, use the `awesome-qst` repo.
+For script implementation details and curated scripts, use the `awesome-qst` repo.

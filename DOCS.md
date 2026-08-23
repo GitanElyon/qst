@@ -1,8 +1,8 @@
 # qst Docs
 
-Here you will find documentation for qst features, configuration, and plugin integration.
+Here you will find documentation for qst features, configuration, and script integration.
 
-Plugin packs (scripts, aliases, community catalog) are documented in:
+Script packs (scripts, aliases, community catalog) are documented in:
 
 - https://github.com/gitanelyon/awesome-qst
 
@@ -58,7 +58,7 @@ qst also supports launch-time flags:
 - `-v, --version`
   - Print the qst version.
 
-`--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
+`--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the script docs.
 
 ## Logging
 
@@ -102,7 +102,7 @@ Each session starts with a fresh `qst.log`. The previous session's log is automa
 
 ### Session cleanup
 
-Archived session logs older than `log_retention_days` are automatically pruned on each startup. This applies to both the main sessions directory and per-plugin session directories.
+Archived session logs older than `log_retention_days` are automatically pruned on each startup. This applies to both the main sessions directory and per-script session directories.
 
 Configured in `~/.config/qst/config.toml`:
 
@@ -174,10 +174,10 @@ Behavior:
 - `Ctrl+d`: toggle debug overlay
 - `Esc`: quit
 
-## Plugin integration notes
+## Script integration notes
 
 - qst is host/runtime.
-- Script plugins live in `~/.config/qst/scripts/`.
+- Scripts live in `~/.config/qst/scripts/`.
 - Protocol, directives, and setup guidance are in `https://github.com/gitanelyon/awesome-qst`.
 
 ## XDG app scan paths
