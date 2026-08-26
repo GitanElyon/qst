@@ -1,11 +1,10 @@
 use crate::config::AppConfig;
 use crate::history::History;
 use dirs::config_dir;
-use log::{debug, error, info, warn};
 use freedesktop_desktop_entry::{Iter, default_paths, get_languages_from_env};
+use log::{debug, error, info, warn};
 use ratatui::widgets::ListState;
 use rustls::{ClientConfig, ClientConnection, Stream};
-use rustls_graviola;
 use std::{
     collections::{HashMap, VecDeque},
     fs,
@@ -114,6 +113,13 @@ pub struct ScriptListing {
     pub metadata: Option<ScriptMetadata>,
 }
 
+type ScriptOutput = (
+    Option<String>,
+    Option<String>,
+    Option<ScriptMetadata>,
+    Vec<ScriptItem>,
+);
+
 #[derive(Debug, Clone)]
 struct ScriptPlugin {
     id: String,
@@ -160,10 +166,10 @@ impl App {
         let history = History::load();
         let scripts = Self::load_scripts(&mut script_aliases);
         info!("Loaded {} scripts", scripts.len());
-        
+
         let mut entries = scan_desktop_files(config.features.show_duplicates);
         info!("Loaded {} desktop entries", entries.len());
-        
+
         if !config.features.show_duplicates {
             let alias_keys: Vec<String> = app_aliases.keys().map(|k| k.to_lowercase()).collect();
             entries.retain(|e| !alias_keys.contains(&e.name.to_lowercase()));
@@ -182,8 +188,14 @@ impl App {
         }
 
         let qst_ascii = if let Some(path) = &config.qst_ascii.custom_path {
-            let expanded_path = path.replace("~", std::env::var("HOME").unwrap_or_else(|_| String::new()).as_str());
-            fs::read_to_string(expanded_path).unwrap_or_else(|_| include_str!("../assets/qst.txt").to_string())
+            let expanded_path = path.replace(
+                "~",
+                std::env::var("HOME")
+                    .unwrap_or_else(|_| String::new())
+                    .as_str(),
+            );
+            fs::read_to_string(expanded_path)
+                .unwrap_or_else(|_| include_str!("../assets/qst.txt").to_string())
         } else {
             include_str!("../assets/qst.txt").to_string()
         };
@@ -249,7 +261,12 @@ impl App {
             .max_by(|(score_a, entry_a), (score_b, entry_b)| {
                 score_a
                     .cmp(score_b)
-                    .then_with(|| entry_a.name.to_lowercase().cmp(&entry_b.name.to_lowercase()))
+                    .then_with(|| {
+                        entry_a
+                            .name
+                            .to_lowercase()
+                            .cmp(&entry_b.name.to_lowercase())
+                    })
                     .then_with(|| entry_a.name.cmp(&entry_b.name))
             })
             .map(|(_, entry)| entry.clone())
@@ -263,7 +280,10 @@ impl App {
             return Err(format!("Program '{}' has no launch command", entry.name));
         };
 
-        info!("Launching program: {} (cmd: {}, args: {:?})", entry.name, cmd, args);
+        info!(
+            "Launching program: {} (cmd: {}, args: {:?})",
+            entry.name, cmd, args
+        );
         let launch_args = self.build_exec_args(args, None);
         self.spawn_command(cmd, launch_args, &entry.name)
     }
@@ -365,7 +385,13 @@ impl App {
         self.script_items
             .iter()
             .enumerate()
-            .find_map(|(index, item)| if item.meta.nonselectable { None } else { Some(index) })
+            .find_map(|(index, item)| {
+                if item.meta.nonselectable {
+                    None
+                } else {
+                    Some(index)
+                }
+            })
     }
 
     fn last_selectable_script_index(&self) -> Option<usize> {
@@ -373,11 +399,20 @@ impl App {
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(index, item)| if item.meta.nonselectable { None } else { Some(index) })
+            .find_map(|(index, item)| {
+                if item.meta.nonselectable {
+                    None
+                } else {
+                    Some(index)
+                }
+            })
     }
 
     fn parse_meta_bool(value: &str) -> bool {
-        !matches!(value.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off")
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "no" | "off"
+        )
     }
 
     fn parse_script_metadata_field(value: &str) -> Option<ScriptMetaField> {
@@ -397,7 +432,10 @@ impl App {
         let author = parts.next().unwrap_or_default().trim();
         let description = parts.next().unwrap_or_default().trim();
 
-        if [name, version, author, description].iter().all(|part| part.is_empty()) {
+        if [name, version, author, description]
+            .iter()
+            .all(|part| part.is_empty())
+        {
             return None;
         }
 
@@ -409,7 +447,7 @@ impl App {
         })
     }
 
-    fn script_metadata_field<'a>(metadata: &'a ScriptMetadata, field: ScriptMetaField) -> Option<&'a str> {
+    fn script_metadata_field(metadata: &ScriptMetadata, field: ScriptMetaField) -> Option<&str> {
         match field {
             ScriptMetaField::Name => metadata.name.as_deref(),
             ScriptMetaField::Version => metadata.version.as_deref(),
@@ -515,7 +553,10 @@ impl App {
         let file_path = Path::new(file_name);
         if file_path.is_absolute()
             || file_path.components().any(|component| {
-                matches!(component, Component::ParentDir | Component::Prefix(_) | Component::RootDir)
+                matches!(
+                    component,
+                    Component::ParentDir | Component::Prefix(_) | Component::RootDir
+                )
             })
         {
             return None;
@@ -558,10 +599,10 @@ impl App {
             return;
         };
 
-        if let Some(parent) = path.parent() {
-            if fs::create_dir_all(parent).is_err() {
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && fs::create_dir_all(parent).is_err()
+        {
+            return;
         }
 
         let mut lines: Vec<String> = fs::read_to_string(&path)
@@ -654,7 +695,9 @@ impl App {
         for (index, item) in items.into_iter().enumerate() {
             let fuzzy_enabled = fuzzy_matching_enabled && (script_fuzzy || item.meta.fuzzy);
             if fuzzy_enabled {
-                if let Some(score) = Self::search_score(query, &Self::script_item_search_text(&item), true) {
+                if let Some(score) =
+                    Self::search_score(query, &Self::script_item_search_text(&item), true)
+                {
                     fuzzy_matches.push((score, index, item));
                 }
             } else {
@@ -728,25 +771,25 @@ impl App {
                 }
             }
 
-            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
                 .then_with(|| a.name.cmp(&b.name))
         });
     }
 
     pub fn toggle_favorite(&mut self) {
-        if self.mode == AppMode::AppSelection {
-            if let Some(i) = self.list_state.selected() {
-                if let Some(entry) = self.filtered_entries.get(i).cloned() {
-                    let is_fav = self.history.is_favorite(&entry.name);
-                    self.history.toggle_favorite(&entry.name);
-                    debug!("Toggled favorite for {} (now: {})", entry.name, !is_fav);
-                    self.sort_entries();
-                    self.update_filter();
-                }
-            }
+        if self.mode == AppMode::AppSelection
+            && let Some(i) = self.list_state.selected()
+            && let Some(entry) = self.filtered_entries.get(i).cloned()
+        {
+            let is_fav = self.history.is_favorite(&entry.name);
+            self.history.toggle_favorite(&entry.name);
+            debug!("Toggled favorite for {} (now: {})", entry.name, !is_fav);
+            self.sort_entries();
+            self.update_filter();
         }
     }
-
 
     pub fn update_filter(&mut self) {
         self.launch_args = None;
@@ -788,11 +831,12 @@ impl App {
                 .entries
                 .iter()
                 .filter_map(|e| {
-                    Self::search_score(&query, &e.name, self.fuzzy_matching_enabled).map(|score| (score, e.clone()))
+                    Self::search_score(&query, &e.name, self.fuzzy_matching_enabled)
+                        .map(|score| (score, e.clone()))
                 })
                 .collect();
 
-            matches.sort_by(|a, b| b.0.cmp(&a.0));
+            matches.sort_by_key(|m| std::cmp::Reverse(m.0));
 
             let matches: Vec<AppEntry> = matches.into_iter().map(|(_, e)| e).collect();
 
@@ -810,32 +854,39 @@ impl App {
                         .entries
                         .iter()
                         .filter_map(|e| {
-                            Self::search_score(&sub_query_lower, &e.name, self.fuzzy_matching_enabled)
-                                .map(|score| (score, e.clone()))
+                            Self::search_score(
+                                &sub_query_lower,
+                                &e.name,
+                                self.fuzzy_matching_enabled,
+                            )
+                            .map(|score| (score, e.clone()))
                         })
                         .collect();
 
-                    sub_matches.sort_by(|a, b| b.0.cmp(&a.0));
+                    sub_matches.sort_by_key(|m| std::cmp::Reverse(m.0));
 
-                    let sub_matches: Vec<AppEntry> = sub_matches.into_iter().map(|(_, e)| e).collect();
+                    let sub_matches: Vec<AppEntry> =
+                        sub_matches.into_iter().map(|(_, e)| e).collect();
 
                     if !sub_matches.is_empty() {
                         self.filtered_entries = sub_matches;
-                        
+
                         if self.config.features.enable_launch_args {
-                            let args: Vec<String> = words[i..].iter().map(|s| s.to_string()).collect();
-                            if let Some(last_arg) = args.last() {
-                                if !last_arg.starts_with('-') && Self::looks_like_path_query(last_arg) {
-                                    let files = self.list_completions(last_arg);
-                                    if !files.is_empty() && self.config.features.enable_file_explorer {
-                                        self.filtered_files = files;
-                                        self.mode = AppMode::FileSelection;
-                                    }
+                            let args: Vec<String> =
+                                words[i..].iter().map(|s| s.to_string()).collect();
+                            if let Some(last_arg) = args.last()
+                                && !last_arg.starts_with('-')
+                                && Self::looks_like_path_query(last_arg)
+                            {
+                                let files = self.list_completions(last_arg);
+                                if !files.is_empty() && self.config.features.enable_file_explorer {
+                                    self.filtered_files = files;
+                                    self.mode = AppMode::FileSelection;
                                 }
                             }
                             self.launch_args = Some(args);
                         }
-                        
+
                         found = true;
                         break;
                     }
@@ -846,7 +897,7 @@ impl App {
                 }
             }
         }
-        
+
         let count = match self.mode {
             AppMode::AppSelection => self.filtered_entries.len(),
             AppMode::FileSelection => self.filtered_files.len(),
@@ -944,41 +995,39 @@ impl App {
         if !self.config.features.enable_auto_complete {
             return;
         }
-        if self.mode == AppMode::FileSelection {
-            if let Some(i) = self.list_state.selected() {
-                if let Some(selected_file) = self.filtered_files.get(i) {
-                    let mut new_path = selected_file.clone();
+        if self.mode == AppMode::FileSelection
+            && let Some(i) = self.list_state.selected()
+            && let Some(selected_file) = self.filtered_files.get(i)
+        {
+            let mut new_path = selected_file.clone();
 
-                    let expanded_path = self.expand_path(&new_path);
-                    if Path::new(&expanded_path).is_dir()
-                        && !new_path.ends_with('/')
-                        && !new_path.ends_with("/.")
-                    {
-                        new_path.push('/');
-                    }
-
-                    if let Some(last_space_idx) = self.search_query.rfind(' ') {
-                        let (prefix, _) = self.search_query.split_at(last_space_idx + 1);
-                        self.set_search_query(format!("{}{}", prefix, new_path));
-                    } else {
-                        self.set_search_query(new_path);
-                    }
-                    self.update_filter();
-                }
+            let expanded_path = self.expand_path(&new_path);
+            if Path::new(&expanded_path).is_dir()
+                && !new_path.ends_with('/')
+                && !new_path.ends_with("/.")
+            {
+                new_path.push('/');
             }
+
+            if let Some(last_space_idx) = self.search_query.rfind(' ') {
+                let (prefix, _) = self.search_query.split_at(last_space_idx + 1);
+                self.set_search_query(format!("{}{}", prefix, new_path));
+            } else {
+                self.set_search_query(new_path);
+            }
+            self.update_filter();
         }
     }
 
     pub fn launch_selected(&mut self) {
-        if self.mode == AppMode::ScriptResults {
-            if let Some(i) = self.list_state.selected() {
-                if let Some(item) = self.script_items.get(i).cloned() {
-                    if item.meta.nonselectable {
-                        return;
-                    }
-                    self.apply_script_actions(&item);
-                }
+        if self.mode == AppMode::ScriptResults
+            && let Some(i) = self.list_state.selected()
+            && let Some(item) = self.script_items.get(i).cloned()
+        {
+            if item.meta.nonselectable {
+                return;
             }
+            self.apply_script_actions(&item);
             return;
         }
 
@@ -1015,37 +1064,37 @@ impl App {
         let mut final_args = Vec::new();
         let launch_placeholders = ["%f", "%F", "%u", "%U"];
 
-        if self.config.features.enable_launch_args {
-            if let Some(launch_args) = &self.launch_args {
-                let mut current_launch_args = launch_args.clone();
+        if self.config.features.enable_launch_args
+            && let Some(launch_args) = &self.launch_args
+        {
+            let mut current_launch_args = launch_args.clone();
 
-                if let Some(selected_file) = selected_file {
-                    if let Some(last) = current_launch_args.last_mut() {
-                        *last = selected_file.to_string();
-                    }
-                }
-
-                let expanded_launch_args: Vec<String> = current_launch_args
-                    .iter()
-                    .map(|arg| self.expand_path(arg))
-                    .collect();
-
-                let mut replaced = false;
-                for arg in args {
-                    if launch_placeholders.contains(&arg.as_str()) {
-                        final_args.extend(expanded_launch_args.clone());
-                        replaced = true;
-                    } else {
-                        final_args.push(arg.clone());
-                    }
-                }
-
-                if !replaced {
-                    final_args.extend(expanded_launch_args);
-                }
-
-                return final_args;
+            if let Some(selected_file) = selected_file
+                && let Some(last) = current_launch_args.last_mut()
+            {
+                *last = selected_file.to_string();
             }
+
+            let expanded_launch_args: Vec<String> = current_launch_args
+                .iter()
+                .map(|arg| self.expand_path(arg))
+                .collect();
+
+            let mut replaced = false;
+            for arg in args {
+                if launch_placeholders.contains(&arg.as_str()) {
+                    final_args.extend(expanded_launch_args.clone());
+                    replaced = true;
+                } else {
+                    final_args.push(arg.clone());
+                }
+            }
+
+            if !replaced {
+                final_args.extend(expanded_launch_args);
+            }
+
+            return final_args;
         }
 
         for arg in args {
@@ -1057,7 +1106,12 @@ impl App {
         final_args
     }
 
-    fn spawn_command(&mut self, cmd: &str, args: Vec<String>, entry_name: &str) -> Result<(), String> {
+    fn spawn_command(
+        &mut self,
+        cmd: &str,
+        args: Vec<String>,
+        entry_name: &str,
+    ) -> Result<(), String> {
         let mut command = Command::new(cmd);
         command
             .args(args)
@@ -1082,8 +1136,7 @@ impl App {
             }
             Err(err) => {
                 error!("Failed to launch {}: {}", entry_name, err);
-                self.status_message =
-                    Some(format!("Failed to launch {}: {}", entry_name, err));
+                self.status_message = Some(format!("Failed to launch {}: {}", entry_name, err));
                 Err(err.to_string())
             }
         }
@@ -1175,7 +1228,10 @@ impl App {
             (input_path.to_path_buf(), String::new(), root)
         } else {
             (
-                input_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+                input_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf(),
                 input_path
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -1245,9 +1301,8 @@ impl App {
             return;
         }
 
-        let loader_script = Self::fetch_remote_loader_script().unwrap_or_else(|| {
-            "#!/bin/sh\necho \"qst! meta \"\ncat \"$@\"\n".to_string()
-        });
+        let loader_script = Self::fetch_remote_loader_script()
+            .unwrap_or_else(|| "#!/bin/sh\necho \"qst! meta \"\ncat \"$@\"\n".to_string());
 
         if fs::write(&loader_path, loader_script).is_ok() {
             Self::ensure_executable(&loader_path);
@@ -1255,9 +1310,7 @@ impl App {
     }
 
     fn fetch_remote_loader_script() -> Option<String> {
-        rustls_graviola::default_provider()
-            .install_default()
-            .ok()?;
+        rustls_graviola::default_provider().install_default().ok()?;
 
         let url = REMOTE_LOADER_SCRIPT_URL.strip_prefix("https://")?;
         let (host, rest) = url.split_once('/')?;
@@ -1279,9 +1332,7 @@ impl App {
         let mut tls_conn = ClientConnection::new(config, server_name).ok()?;
         let mut tls_stream = Stream::new(&mut tls_conn, &mut tcp);
 
-        let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-        );
+        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
         tls_stream.write_all(request.as_bytes()).ok()?;
         tls_stream.flush().ok()?;
 
@@ -1358,7 +1409,7 @@ impl App {
 
     fn load_scripts(aliases: &mut HashMap<String, String>) -> Vec<ScriptPlugin> {
         let mut scripts = Vec::new();
-        
+
         let Some(dir) = Self::scripts_dir() else {
             return scripts;
         };
@@ -1439,7 +1490,7 @@ impl App {
         let Ok(value) = toml::from_str::<toml::Value>(&contents) else {
             return (script_aliases, app_aliases);
         };
-        
+
         if let Some(table) = value.as_table() {
             let has_scripts = table.contains_key("scripts");
             let has_apps = table.contains_key("apps");
@@ -1568,7 +1619,10 @@ impl App {
                 debug!("Script {} returned {} items", script.id, items.len());
                 self.script_meta = meta.clone();
                 self.script_title = title
-                    .or_else(|| meta.and_then(|meta| meta.name).map(|name| format!(" {} ", name)))
+                    .or_else(|| {
+                        meta.and_then(|meta| meta.name)
+                            .map(|name| format!(" {} ", name))
+                    })
                     .or_else(|| Some(format!(" {} ", script.id)));
                 self.script_items = items;
                 self.status_message = message;
@@ -1610,26 +1664,26 @@ impl App {
         })
     }
 
-            fn search_score(query: &str, target: &str, fuzzy_matching_enabled: bool) -> Option<i64> {
-                let query = query.trim();
-                if query.is_empty() {
-                    return Some(0);
-                }
+    fn search_score(query: &str, target: &str, fuzzy_matching_enabled: bool) -> Option<i64> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Some(0);
+        }
 
-                if fuzzy_matching_enabled {
-                    return fuzzy_score(query, target);
-                }
+        if fuzzy_matching_enabled {
+            return fuzzy_score(query, target);
+        }
 
-                let query_lower = query.to_lowercase();
-                let target_lower = target.to_lowercase();
-                if target_lower.contains(&query_lower) {
-                    Some((query_lower.len() as i64).saturating_mul(10) - target_lower.len() as i64)
-                } else {
-                    None
-                }
-            }
+        let query_lower = query.to_lowercase();
+        let target_lower = target.to_lowercase();
+        if target_lower.contains(&query_lower) {
+            Some((query_lower.len() as i64).saturating_mul(10) - target_lower.len() as i64)
+        } else {
+            None
+        }
+    }
 
-    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
+    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<ScriptOutput, String> {
         self.run_script_with_timeout(script, payload, Self::SCRIPT_TIMEOUT)
     }
 
@@ -1638,7 +1692,7 @@ impl App {
         script: &ScriptPlugin,
         payload: &str,
         timeout: Duration,
-    ) -> Result<(Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>), String> {
+    ) -> Result<ScriptOutput, String> {
         let mut command = if let Some(interpreter) = script.interpreter {
             let mut command = Command::new(interpreter);
             command.arg(&script.path);
@@ -1697,7 +1751,12 @@ impl App {
         }
 
         let stdout = String::from_utf8_lossy(&stdout);
-        Ok(Self::parse_script_output(&stdout, payload, &script.id, self.fuzzy_matching_enabled))
+        Ok(Self::parse_script_output(
+            &stdout,
+            payload,
+            &script.id,
+            self.fuzzy_matching_enabled,
+        ))
     }
 
     fn read_pipe<R>(mut pipe: R) -> Vec<u8>
@@ -1728,7 +1787,7 @@ impl App {
         query: &str,
         script_id: &str,
         fuzzy_matching_enabled: bool,
-    ) -> (Option<String>, Option<String>, Option<ScriptMetadata>, Vec<ScriptItem>) {
+    ) -> ScriptOutput {
         let mut title: Option<String> = None;
         let mut message: Option<String> = None;
         let mut meta: Option<ScriptMetadata> = None;
@@ -1747,22 +1806,25 @@ impl App {
                 if let Some(value) = directive.strip_prefix("meta ") {
                     let value = value.trim();
                     if let Some(field) = Self::parse_script_metadata_field(value) {
-                        if let Some(current_meta) = meta.as_ref() {
-                            if let Some(field_value) = Self::script_metadata_field(current_meta, field)
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                            {
-                                message = Some(field_value.to_string());
-                            }
+                        if let Some(current_meta) = meta.as_ref()
+                            && let Some(field_value) =
+                                Self::script_metadata_field(current_meta, field)
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                        {
+                            message = Some(field_value.to_string());
                         }
                         continue;
                     }
 
                     if let Some(parsed_meta) = Self::parse_script_metadata(value) {
-                        if title.is_none() {
-                            if let Some(name) = parsed_meta.name.as_deref().filter(|value| !value.is_empty()) {
-                                title = Some(format!(" {} ", name));
-                            }
+                        if title.is_none()
+                            && let Some(name) = parsed_meta
+                                .name
+                                .as_deref()
+                                .filter(|value| !value.is_empty())
+                        {
+                            title = Some(format!(" {} ", name));
                         }
                         meta = Some(parsed_meta);
                         continue;
@@ -1825,7 +1887,8 @@ impl App {
                         .map(|action| action.trim())
                         .and_then(Self::parse_script_storage_read_action)
                         .unwrap_or(ScriptStorageReadAction::All);
-                    let read_items = Self::read_script_storage_lines(script_id, file_name, read_action);
+                    let read_items =
+                        Self::read_script_storage_lines(script_id, file_name, read_action);
                     Self::append_storage_rows(
                         &mut items,
                         read_items,
@@ -1841,7 +1904,8 @@ impl App {
                 if let Some(value) = directive.strip_prefix("single ") {
                     let mut parts = value.splitn(2, '|');
                     let query = parts.next().unwrap_or_default().trim();
-                    let (result_text, result_meta) = Self::parse_script_row_text(parts.next().unwrap_or_default().trim());
+                    let (result_text, result_meta) =
+                        Self::parse_script_row_text(parts.next().unwrap_or_default().trim());
                     let label = if query.is_empty() {
                         result_text.clone()
                     } else {
@@ -1861,7 +1925,8 @@ impl App {
                 }
                 if let Some(value) = directive.strip_prefix("item ") {
                     let mut parts = value.splitn(3, '|');
-                    let (item_title, title_meta) = Self::parse_script_row_text(parts.next().unwrap_or_default().trim());
+                    let (item_title, title_meta) =
+                        Self::parse_script_row_text(parts.next().unwrap_or_default().trim());
                     let value_part = parts.next().unwrap_or(item_title.as_str()).trim();
                     let (item_value, value_meta) = Self::parse_script_row_text(value_part);
                     let (explicit_action, action_meta) = parts
@@ -1905,7 +1970,8 @@ impl App {
             }
 
             let mut parts = line.splitn(2, '|');
-            let (item_title, title_meta) = Self::parse_script_row_text(parts.next().unwrap_or_default().trim());
+            let (item_title, title_meta) =
+                Self::parse_script_row_text(parts.next().unwrap_or_default().trim());
             if item_title.is_empty() {
                 continue;
             }
@@ -1925,9 +1991,10 @@ impl App {
             });
         }
 
-        let items = Self::fuzzy_filter_script_items(items, query, script_fuzzy, fuzzy_matching_enabled);
+        let items =
+            Self::fuzzy_filter_script_items(items, query, script_fuzzy, fuzzy_matching_enabled);
         let mut items = items;
-        items.sort_by(|a, b| b.meta.urgent.cmp(&a.meta.urgent));
+        items.sort_by_key(|item| std::cmp::Reverse(item.meta.urgent));
 
         (title, message, meta, items)
     }
@@ -2105,7 +2172,7 @@ impl App {
             .unwrap_or_else(|| "wl-copy".to_string());
 
         let mut command = Command::new("sh");
-        command.arg("-lc").arg(format!("{}", clipboard_command));
+        command.arg("-lc").arg(clipboard_command);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -2152,17 +2219,18 @@ fn scan_desktop_files(show_duplicates: bool) -> Vec<AppEntry> {
         .collect();
 
     entries.sort_by(|a, b| {
-        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
             .then_with(|| a.name.cmp(&b.name))
     });
-    
+
     if !show_duplicates {
         entries.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
     }
-    
+
     entries
 }
-
 
 pub(crate) fn fuzzy_score(query: &str, target: &str) -> Option<i64> {
     let query_chars: Vec<char> = query.chars().collect();
@@ -2219,7 +2287,12 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     struct TempDirCleanup(PathBuf);
 
@@ -2263,14 +2336,17 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("qst-file-completions-{}-{}", std::process::id(), suffix))
+        std::env::temp_dir().join(format!(
+            "qst-file-completions-{}-{}",
+            std::process::id(),
+            suffix
+        ))
     }
 
     #[test]
     fn parse_script_row_text_strips_fuzzy_and_center_meta() {
-        let (visible, meta) = App::parse_script_row_text(
-            "Clipboard entry @meta:fuzzy=true @meta:center=true",
-        );
+        let (visible, meta) =
+            App::parse_script_row_text("Clipboard entry @meta:fuzzy=true @meta:center=true");
 
         assert_eq!(visible, "Clipboard entry");
         assert!(meta.fuzzy);
@@ -2310,7 +2386,12 @@ mod tests {
             meta: ScriptRowMeta::default(),
         };
 
-        let filtered = App::fuzzy_filter_script_items(vec![plain_item.clone(), fuzzy_item.clone()], "clb", false, true);
+        let filtered = App::fuzzy_filter_script_items(
+            vec![plain_item.clone(), fuzzy_item.clone()],
+            "clb",
+            false,
+            true,
+        );
 
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].title, fuzzy_item.title);
@@ -2320,8 +2401,13 @@ mod tests {
     #[test]
     fn parse_script_output_ignores_log_directive_and_continues_parsing() {
         let output = "qst! title Test\nqst! log some debug info\nHello|world\n";
-        let (_title, _message, _meta, items) = App::parse_script_output(output, "", "test_logger", true);
-        assert_eq!(items.len(), 1, "log directive should not suppress item parsing");
+        let (_title, _message, _meta, items) =
+            App::parse_script_output(output, "", "test_logger", true);
+        assert_eq!(
+            items.len(),
+            1,
+            "log directive should not suppress item parsing"
+        );
         assert_eq!(items[0].title, "Hello");
         assert_eq!(items[0].value, "world");
     }
@@ -2358,7 +2444,10 @@ mod tests {
         assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
         assert_eq!(meta.version.as_deref(), Some("1.0.0"));
         assert_eq!(meta.author.as_deref(), Some("John Doe"));
-        assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("This script does awesome things!")
+        );
     }
 
     #[test]
@@ -2375,7 +2464,10 @@ mod tests {
         assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
         assert_eq!(meta.version.as_deref(), Some("1.0.0"));
         assert_eq!(meta.author.as_deref(), Some("John Doe"));
-        assert_eq!(meta.description.as_deref(), Some("This script does awesome things!"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("This script does awesome things!")
+        );
     }
 
     #[test]
@@ -2395,9 +2487,20 @@ mod tests {
         let dot_entry = format!("{}.", query);
         let completions = app.list_completions(&query);
 
-        assert_eq!(completions.first().map(String::as_str), Some(dot_entry.as_str()));
-        assert!(completions.iter().any(|entry| entry == &format!("{}docs/", query)));
-        assert!(completions.iter().any(|entry| entry == &format!("{}alpha.txt", query)));
+        assert_eq!(
+            completions.first().map(String::as_str),
+            Some(dot_entry.as_str())
+        );
+        assert!(
+            completions
+                .iter()
+                .any(|entry| entry == &format!("{}docs/", query))
+        );
+        assert!(
+            completions
+                .iter()
+                .any(|entry| entry == &format!("{}alpha.txt", query))
+        );
 
         let filtered = app.list_completions(&format!("{}a", query));
         assert_eq!(filtered, vec![format!("{}alpha.txt", query)]);
@@ -2450,12 +2553,16 @@ mod tests {
         )
         .unwrap();
 
-        let metadata = App::read_script_metadata_from_source(&script_path).expect("metadata should be parsed");
+        let metadata =
+            App::read_script_metadata_from_source(&script_path).expect("metadata should be parsed");
 
         assert_eq!(metadata.name.as_deref(), Some("Sample Name"));
         assert_eq!(metadata.version.as_deref(), Some("1.2.3"));
         assert_eq!(metadata.author.as_deref(), Some("Tester"));
-        assert_eq!(metadata.description.as_deref(), Some("Describes the script"));
+        assert_eq!(
+            metadata.description.as_deref(),
+            Some("Describes the script")
+        );
     }
 
     #[test]
@@ -2476,4 +2583,3 @@ mod tests {
         assert_eq!(mode & 0o111, 0o111);
     }
 }
-

@@ -3,41 +3,45 @@
 </p>
 
 
-Qst, pronounced "quest", is a TUI Linux application launcher built with Rust + Ratatui.
+Qst, pronounced "quest", is a TUI Linux application launcher built with Rust + Ratatui. Launch apps, browse files, and run scripts from one keyboard-first interface.
 
-## Highlights
+## Overview
 
-- Fast `.desktop` app scanning and fuzzy search.
-- Usage/favorites-based ordering.
-- Launch arguments support.
-- File explorer mode enabled by default.
-- Keyboard-first navigation and customization.
-- Extensible plugin system with script-based plugins.
+- Fast `.desktop` app scanning with fuzzy search.
+- Usage and favorites-based ordering.
+- File explorer mode with path autocompletion.
+- Extensible script system with a community catalog.
+- Fully customizable layout and colors.
 
-## Plugin model
+<p align="center">
+  <img src="assets/screenshot.png" alt="qst screenshot" width="477">
+</p>
 
-qst is the host runtime. Plugins are script-based and live in `~/.config/qst/scripts/`. Plugins can define custom triggers, query handling, and output formatting via a simple line-oriented protocol. 
+## Quick start
 
-Note: qst bundles a helper script, `loader.sh`, and will install it into `~/.config/qst/scripts/` on first run so users can browse and install community plugins without manually copying files.
+```bash
+# Install qst via Nix (recommended)
+nix profile install "github:GitanElyon/qst"
 
-Scripts can be executable files (any language) or extension-based scripts run through supported interpreters (`.sh`, `.bash`, `.zsh`, `.fish`, `.py`, `.pl`, `.rb`, `.js`, `.lua`).
+# Launch qst
+qst
+```
 
-The plugin ecosystem is cataloged in `awesome-qst`:
-- https://github.com/gitanelyon/awesome-qst
+Thats it! You can then start browsing apps, or install scripts from the community catalog with `loader.sh` (installed automatically on first run).
 
 ## Install
 
-Install via Nix (recommended):
+Via Nix (recommended):
 ```bash
 nix profile install "github:GitanElyon/qst"
 ```
 
-Or via the AUR (Arch Linux):
+Via the AUR (Arch Linux):
 ```bash
 yay -S qst
 ```
 
-Or via Cargo:
+Via Cargo:
 ```bash
 cargo install --locked qst
 ```
@@ -51,36 +55,35 @@ cargo install --locked --path .
 
 ## Usage
 
-Either run qst from the terminal:
+Run qst from the terminal:
 
 ```bash
 qst
 ```
 
-You can also use launch-time flags:
+Or bind it to a global hotkey (e.g. `Super+Space`) in your desktop environment's keyboard settings. Hyprland example, to mimic `rofi`:
 
-```bash
-qst --config <path>       # points Qst to a new different config file
-qst --prefill <string>    # seeds the initial search text
-qst --shy                 # opens launcher with text hidden untill query is entered
-qst --no-fuzzy            # disables fuzzy finding
-qst --clear-history       # clears Qst's launch history
-qst --clear-favorites     # clears favorite list
-qst --program <program>   # launches the first result of the query
-qst --script <script>     # opens the script on startup
-qst --list-programs       # lists available programs
-qst --list-scripts        # lets available scripts
-qst --debug-overlay       # start with the debug overlay visible
-qst --log-level debug     # set log level: debug, info, warn, error (default: info)
-```
-
-Or bind to a global hotkey (e.g. `Super+Space`) using your desktop environment's keyboard settings.
-
-Example for hyperland users to mimic `rofi`:
 ```
 bind = $mod, space, exec, [float; size 350 400] $terminal -e qst
 ```
 
+## Scripts
+
+qst scripts extend the launcher with custom functionality — system info, todo lists, calculators, clipboard history, and more. Scripts live in `~/.config/qst/scripts/` and are triggered by typing their name.
+
+> **Note:** On first run, qst downloads and installs `loader.sh` into `~/.config/qst/scripts/` to give you a script browser out of the box. It is fetched from the `awesome-qst` repository. This system is getting a full overhaul in the future.
+
+With `loader.sh` installed, browse and install community scripts right from qst:
+
+```
+loader                    browse the catalog
+loader <terms>            filter the catalog
+loader u <script>         install or update a script
+loader r <script>         remove a locally installed script
+loader a <script> <alias> set an alias for a script
+```
+
+The community catalog lives in [awesome-qst](https://github.com/gitanelyon/awesome-qst). Scripts are simple executable files (shell, Python, Perl, and more) that follow a line-oriented protocol; see [API.md](API.md) to write your own.
 
 ## Keybindings
 
@@ -88,55 +91,31 @@ bind = $mod, space, exec, [float; size 350 400] $terminal -e qst
 - `Left`/`Right`: move cursor in input
 - `Tab`: autocomplete path
 - `Enter`: launch/open selected item
-- `Esc`: quit
 - `Alt+f`: toggle favorite
 - `Ctrl+d`: toggle debug overlay
+- `Esc`: quit
 
-## Logging
+## Configuration
 
-qst writes logs to `~/.local/state/qst/qst.log` with the following format:
+qst generates `~/.config/qst/config.toml` automatically on first run, or explicitly with:
 
-```
-[2024-06-15 10:30:45.123] [INFO] [src/app.rs:127] Loaded 17 scripts
-```
-
-### Log levels
-
-| Level | Purpose |
-|---|---|
-| `DEBUG` | All actions, user movement, key events, renders |
-| `INFO` | Script loads, program launches, config loaded |
-| `WARN` | Minor errors (parsing issues, script timeouts) |
-| `ERROR` | Fatal errors (script won't load, app crashes) |
-
-Default level is `INFO`. Configure via `--log-level <level>` flag or `log_level` in `config.toml` (`[general]` section).
-
-### Session history
-
-Each qst session starts fresh. The previous session's log is moved to `~/.local/state/qst/sessions/<timestamp>.log` automatically.
-
-## Debug overlay
-
-Press `Ctrl+d` (or your configured `debug_key`) to toggle a diagnostic bar at the top of the TUI:
-
-```
-FPS: 60 | Frame: 16.5ms | Entries: 42 | Events: 1234
+```bash
+qst --gen-config
 ```
 
-Shows real-time FPS, frame render time, current entry count, and total key events this session.
-
-The keybinding can be customized in `~/.config/qst/config.toml`:
+The config controls layout, colors, keybindings, and behavior. Optional trigger aliases for scripts and apps can be defined in `~/.config/qst/alias.toml`:
 
 ```toml
-[general]
-debug_key = "ctrl+d"
+[scripts]
+"volume.sh" = "v!"
+battery = ":"
+
+[apps]
+"btop++" = "alacritty -e btop"
 ```
 
-Start with the overlay enabled via `--debug-overlay`.
+## Docs
 
-## Config files
-
-- `~/.config/qst/config.toml`
-- `~/.config/qst/alias.toml` (optional script and app aliases)
-
-See [DOCS.md](DOCS.md) for full configuration details.
+- [DOCS.md](DOCS.md) — full configuration, CLI options, and feature details
+- [API.md](API.md) — script protocol reference
+- [CHANGELOG.md](CHANGELOG.md) — release history

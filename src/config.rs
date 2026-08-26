@@ -1,4 +1,5 @@
 use dirs::config_dir;
+use log::{info, warn};
 use ratatui::{
     prelude::*,
     widgets::{Block, BorderType, Borders},
@@ -7,7 +8,6 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use log::{info, warn};
 
 pub struct ConfigLoadResult {
     pub config: AppConfig,
@@ -37,17 +37,26 @@ impl AppConfig {
         let mut warning = None;
         let Some(config_path) = Self::resolve_config_path(config_path) else {
             warning = Some("Could not locate configuration directory. Using defaults.".into());
-            return ConfigLoadResult { config: default, warning };
+            return ConfigLoadResult {
+                config: default,
+                warning,
+            };
         };
 
-        if let Some(parent) = config_path.parent() {
-            if !parent.as_os_str().is_empty() && fs::create_dir_all(parent).is_err() {
-                warning = Some(match config_path == Self::default_config_path().unwrap_or_default() {
+        if let Some(parent) = config_path.parent()
+            && !parent.as_os_str().is_empty()
+            && fs::create_dir_all(parent).is_err()
+        {
+            warning = Some(
+                match config_path == Self::default_config_path().unwrap_or_default() {
                     true => "Unable to create ~/.config/qst, using defaults".into(),
                     false => format!("Unable to create configuration directory: {:?}", parent),
-                });
-                return ConfigLoadResult { config: default, warning };
-            }
+                },
+            );
+            return ConfigLoadResult {
+                config: default,
+                warning,
+            };
         }
 
         let config = if config_path.exists() {
@@ -74,10 +83,7 @@ impl AppConfig {
                     }
                 },
                 Err(err) => {
-                    warning = Some(format!(
-                        "Failed to read config ({}). Using defaults.",
-                        err
-                    ));
+                    warning = Some(format!("Failed to read config ({}). Using defaults.", err));
                     default
                 }
             }
@@ -108,22 +114,54 @@ impl AppConfig {
         let mut warnings = Vec::new();
 
         self.window.collect_color_warnings("window", &mut warnings);
-        self.outer_box.collect_color_warnings("outer-box", &mut warnings);
-        self.qst_ascii.section.collect_color_warnings("qst-ascii", &mut warnings);
-        collect_color_warnings("qst-ascii.gradient-colors", &self.qst_ascii.gradient_colors, &mut warnings);
+        self.outer_box
+            .collect_color_warnings("outer-box", &mut warnings);
+        self.qst_ascii
+            .section
+            .collect_color_warnings("qst-ascii", &mut warnings);
+        collect_color_warnings(
+            "qst-ascii.gradient-colors",
+            &self.qst_ascii.gradient_colors,
+            &mut warnings,
+        );
         self.input.collect_color_warnings("input", &mut warnings);
-        self.list.section.collect_color_warnings("results", &mut warnings);
+        self.list
+            .section
+            .collect_color_warnings("results", &mut warnings);
         collect_color_warnings("entry.fg", &self.entry.fg, &mut warnings);
         collect_color_warnings("entry.bg", &self.entry.bg, &mut warnings);
-        self.entry_selected.collect_color_warnings("entry-selected", &mut warnings);
-        self.meta.active.collect_color_warnings("meta.active", &mut warnings);
-        self.meta.urgent.collect_color_warnings("meta.urgent", &mut warnings);
-        self.text.section.collect_color_warnings("text", &mut warnings);
+        self.entry_selected
+            .collect_color_warnings("entry-selected", &mut warnings);
+        self.meta
+            .active
+            .collect_color_warnings("meta.active", &mut warnings);
+        self.meta
+            .urgent
+            .collect_color_warnings("meta.urgent", &mut warnings);
+        self.text
+            .section
+            .collect_color_warnings("text", &mut warnings);
 
-        validate_key_binding("general.favorite_key", self.general.favorite_key.as_deref(), &mut warnings);
-        validate_key_binding("general.jump_to_top_key", self.general.jump_to_top_key.as_deref(), &mut warnings);
-        validate_key_binding("general.jump_to_bottom_key", self.general.jump_to_bottom_key.as_deref(), &mut warnings);
-        validate_key_binding("general.debug_key", self.general.debug_key.as_deref(), &mut warnings);
+        validate_key_binding(
+            "general.favorite_key",
+            self.general.favorite_key.as_deref(),
+            &mut warnings,
+        );
+        validate_key_binding(
+            "general.jump_to_top_key",
+            self.general.jump_to_top_key.as_deref(),
+            &mut warnings,
+        );
+        validate_key_binding(
+            "general.jump_to_bottom_key",
+            self.general.jump_to_bottom_key.as_deref(),
+            &mut warnings,
+        );
+        validate_key_binding(
+            "general.debug_key",
+            self.general.debug_key.as_deref(),
+            &mut warnings,
+        );
 
         for w in &warnings {
             warn!("{w}");
@@ -139,7 +177,7 @@ impl Default for AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct ResultsConfig {
     #[serde(flatten)]
@@ -149,16 +187,6 @@ pub struct ResultsConfig {
     pub apps_title: Option<String>,
     #[serde(alias = "directories-title")]
     pub files_title: Option<String>,
-}
-
-impl Default for ResultsConfig {
-    fn default() -> Self {
-        Self {
-            section: SectionConfig::default(),
-            apps_title: None,
-            files_title: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,7 +206,7 @@ impl Default for QstAsciiConfig {
     fn default() -> Self {
         Self {
             section: SectionConfig {
-               visible: Some(true),
+                visible: Some(true),
                 ..SectionConfig::default()
             },
             gradient_colors: vec![String::from("#6464ff"), String::from("#c864ff")],
@@ -223,20 +251,11 @@ impl Default for EntryConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct MetaConfig {
     pub active: SectionConfig,
     pub urgent: SectionConfig,
-}
-
-impl Default for MetaConfig {
-    fn default() -> Self {
-        Self {
-            active: SectionConfig::default(),
-            urgent: SectionConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -402,7 +421,11 @@ impl SectionConfig {
     fn collect_color_warnings(&self, section_name: &str, warnings: &mut Vec<String>) {
         collect_color_warnings(&format!("{}.fg", section_name), &self.fg, warnings);
         collect_color_warnings(&format!("{}.bg", section_name), &self.bg, warnings);
-        collect_color_warnings(&format!("{}.border-color", section_name), &self.border_color, warnings);
+        collect_color_warnings(
+            &format!("{}.border-color", section_name),
+            &self.border_color,
+            warnings,
+        );
     }
 }
 
@@ -540,21 +563,23 @@ fn validate_key_binding(label: &str, value: Option<&str>, warnings: &mut Vec<Str
 fn is_valid_key_binding(value: &str) -> bool {
     let mut has_code = false;
 
-    for part in value.to_lowercase().split('+').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in value
+        .to_lowercase()
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         match part {
             "ctrl" | "control" | "alt" | "option" | "shift" | "super" | "cmd" | "win" | "meta" => {}
-            "enter" | "return" | "esc" | "escape" | "backspace" | "tab" | "space" | "up" | "down" | "left" | "right" => {
+            "enter" | "return" | "esc" | "escape" | "backspace" | "tab" | "space" | "up"
+            | "down" | "left" | "right" => {
                 has_code = true;
             }
             s if s.len() == 1 => {
                 has_code = true;
             }
-            s if s.starts_with('f') && s.len() > 1 => {
-                if s[1..].parse::<u8>().is_ok() {
-                    has_code = true;
-                } else {
-                    return false;
-                }
+            s if s.starts_with('f') && s.len() > 1 && s[1..].parse::<u8>().is_ok() => {
+                has_code = true;
             }
             _ => return false,
         }
@@ -590,10 +615,26 @@ mod tests {
         let warnings = config.validation_warnings();
 
         assert!(warnings.iter().any(|warning| warning.contains("window.fg")));
-        assert!(warnings.iter().any(|warning| warning.contains("qst-ascii.gradient-colors")));
-        assert!(warnings.iter().any(|warning| warning.contains("general.favorite_key")));
-        assert!(warnings.iter().any(|warning| warning.contains("general.jump_to_top_key")));
-        assert!(!warnings.iter().any(|warning| warning.contains("general.jump_to_bottom_key")));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("qst-ascii.gradient-colors"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("general.favorite_key"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("general.jump_to_top_key"))
+        );
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.contains("general.jump_to_bottom_key"))
+        );
     }
 }
 
@@ -615,4 +656,3 @@ where
         Some(ColorStopsInput::Multiple(list)) => list,
     })
 }
-

@@ -17,14 +17,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let now = Instant::now();
     app.frame_times.push_back(now);
     let cutoff = now - std::time::Duration::from_secs(1);
-    while app.frame_times.front().map_or(false, |t| *t < cutoff) {
+    while app.frame_times.front().is_some_and(|t| *t < cutoff) {
         app.frame_times.pop_front();
     }
     app.debug_fps = app.frame_times.len() as f64;
     if app.frame_times.len() >= 2 {
         app.debug_frame_ms = app.frame_times[app.frame_times.len() - 1]
             .duration_since(app.frame_times[app.frame_times.len() - 2])
-            .as_secs_f64() * 1000.0;
+            .as_secs_f64()
+            * 1000.0;
     }
 
     let area = f.area();
@@ -55,12 +56,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.show_debug {
         constraints.push(Constraint::Length(1));
     }
-    
+
     let qst_lines = app.qst_ascii.lines().count() as u16;
 
     if config.qst_ascii.section.is_visible() {
         let p = &config.qst_ascii.padding;
-        constraints.push(Constraint::Length(qst_lines + p.top + p.bottom)); 
+        constraints.push(Constraint::Length(qst_lines + p.top + p.bottom));
     }
 
     if config.input.is_visible() {
@@ -88,15 +89,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             app.filtered_entries.len(),
             app.total_events,
         );
-        let debug_widget = Paragraph::new(debug_text)
-            .style(Style::default().fg(Color::DarkGray));
+        let debug_widget = Paragraph::new(debug_text).style(Style::default().fg(Color::DarkGray));
         f.render_widget(debug_widget, chunk);
     }
 
     if config.qst_ascii.section.is_visible() {
         let chunk = chunks[chunk_index];
         chunk_index += 1;
-        
+
         let p = &config.qst_ascii.padding;
         let inner_area = Rect {
             x: chunk.x + p.left,
@@ -108,57 +108,66 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let ascii_colors = parse_gradient_colors(&config.qst_ascii.gradient_colors);
 
         let mut widget = if ascii_colors.len() > 1 {
-             let width = app
-                 .qst_ascii
-                 .lines()
-                 .map(|line| line.chars().count() as u16)
-                 .max()
-                 .unwrap_or(1)
-                 .max(1);
-             let height = qst_lines.max(1);
+            let width = app
+                .qst_ascii
+                .lines()
+                .map(|line| line.chars().count() as u16)
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            let height = qst_lines.max(1);
 
-             let lines: Vec<Line> = app
-                 .qst_ascii
-                 .lines()
-                 .enumerate()
-                 .map(|(y, line)| {
-                     let spans: Vec<Span> = line
-                         .chars()
-                         .enumerate()
-                         .map(|(x, ch)| {
-                             let color = gradient_color_at_point(
-                                 &ascii_colors,
-                                 config.qst_ascii.gradient_angle,
-                                 x as u16,
-                                 y as u16,
-                                 width,
-                                 height,
-                             );
-                             Span::styled(ch.to_string(), Style::default().fg(color))
-                         })
-                         .collect();
+            let lines: Vec<Line> = app
+                .qst_ascii
+                .lines()
+                .enumerate()
+                .map(|(y, line)| {
+                    let spans: Vec<Span> = line
+                        .chars()
+                        .enumerate()
+                        .map(|(x, ch)| {
+                            let color = gradient_color_at_point(
+                                &ascii_colors,
+                                config.qst_ascii.gradient_angle,
+                                x as u16,
+                                y as u16,
+                                width,
+                                height,
+                            );
+                            Span::styled(ch.to_string(), Style::default().fg(color))
+                        })
+                        .collect();
 
-                     if spans.is_empty() {
-                         Line::from(Span::raw(""))
-                     } else {
-                         Line::from(spans)
-                     }
-                 })
-                 .collect();
-             Paragraph::new(lines)
+                    if spans.is_empty() {
+                        Line::from(Span::raw(""))
+                    } else {
+                        Line::from(spans)
+                    }
+                })
+                .collect();
+            Paragraph::new(lines)
         } else {
-             let mut p_widget = Paragraph::new(app.qst_ascii.as_str());
-               if let Some(color) = ascii_colors
-                  .first()
-                  .copied()
-                  .or_else(|| config.qst_ascii.section.fg.first().and_then(|v| crate::config::parse_color(v)))
-               {
-                  p_widget = p_widget.style(Style::default().fg(color));
-             }
-             p_widget
+            let mut p_widget = Paragraph::new(app.qst_ascii.as_str());
+            if let Some(color) = ascii_colors.first().copied().or_else(|| {
+                config
+                    .qst_ascii
+                    .section
+                    .fg
+                    .first()
+                    .and_then(|v| crate::config::parse_color(v))
+            }) {
+                p_widget = p_widget.style(Style::default().fg(color));
+            }
+            p_widget
         };
 
-        widget = widget.alignment(config.qst_ascii.alignment.unwrap_or(crate::config::TextAlignment::Center).into());
+        widget = widget.alignment(
+            config
+                .qst_ascii
+                .alignment
+                .unwrap_or(crate::config::TextAlignment::Center)
+                .into(),
+        );
         f.render_widget(widget, inner_area);
     }
 
@@ -197,11 +206,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.set_cursor_position((list_chunk.x, list_chunk.y));
     }
 
-    if let Some(chunk) = status_chunk {
-        if let Some(message) = &app.status_message {
-            let status = Paragraph::new(message.as_str()).style(Style::default().fg(Color::Yellow));
-            f.render_widget(status, chunk);
-        }
+    if let Some(chunk) = status_chunk
+        && let Some(message) = &app.status_message
+    {
+        let status = Paragraph::new(message.as_str()).style(Style::default().fg(Color::Yellow));
+        f.render_widget(status, chunk);
     }
 
     let scroll_area = list_chunk;
@@ -232,154 +241,170 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let full_row_width = text_area_width + selected_symbol_width;
 
     let items: Vec<ListItem> = if app.mode == AppMode::AppSelection {
-            app.filtered_entries
-                .iter()
-                .enumerate()
-                .map(|(idx, entry)| {
-                    if !config.text.is_visible() {
-                        return ListItem::new(Span::raw(""));
-                    }
+        app.filtered_entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                if !config.text.is_visible() {
+                    return ListItem::new(Span::raw(""));
+                }
 
-                    let is_fav = app.history.is_favorite(&entry.name);
-                    let fav_symbol = config.general.favorite_symbol.as_deref().unwrap_or("★ ");
-                    let empty_prefix = " ".repeat(fav_symbol.chars().count());
-                    let prefix = if is_fav { fav_symbol } else { &empty_prefix };
-                    let name_with_icon = format!("{}{}", prefix, entry.name);
+                let is_fav = app.history.is_favorite(&entry.name);
+                let fav_symbol = config.general.favorite_symbol.as_deref().unwrap_or("★ ");
+                let empty_prefix = " ".repeat(fav_symbol.chars().count());
+                let prefix = if is_fav { fav_symbol } else { &empty_prefix };
+                let name_with_icon = format!("{}{}", prefix, entry.name);
 
-                    let mut display_text = aligned_text(
-                        &name_with_icon,
-                        text_area_width,
-                        config.text.alignment(),
-                        selected_symbol_width,
-                    );
+                let mut display_text = aligned_text(
+                    &name_with_icon,
+                    text_area_width,
+                    config.text.alignment(),
+                    selected_symbol_width,
+                );
 
-                    if entry_selected_visible {
-                        let prefix = if Some(idx) == selected_idx {
-                            highlight_symbol.to_string()
-                        } else {
-                            " ".repeat(highlight_symbol.chars().count())
-                        };
-                        display_text = format!("{}{}", prefix, display_text);
-                    }
-
-                    build_list_item(
-                        &display_text,
-                        config,
-                        Some(idx) == selected_idx,
-                        &entry_fg_colors,
-                        &entry_bg_colors,
-                        &selected_fg_colors,
-                        &selected_bg_colors,
-                        config.entry.gradient_angle,
-                        config.entry_selected.gradient_angle,
-                        full_row_width,
-                        normal_entry_style,
-                        entry_style,
-                        false,
-                    )
-                })
-                .collect()
-        } else if app.mode == AppMode::ScriptResults {
-            app.script_items
-                .iter()
-                .enumerate()
-                .map(|(idx, item)| {
-                    let visible_title = item.meta.display.as_deref().unwrap_or(&item.title);
-                    let label = visible_title.to_string();
-                    let alignment = if item.meta.center {
-                        TextAlignment::Center
+                if entry_selected_visible {
+                    let prefix = if Some(idx) == selected_idx {
+                        highlight_symbol.to_string()
                     } else {
-                        config.text.alignment()
+                        " ".repeat(highlight_symbol.chars().count())
                     };
-                    let mut display_text = aligned_text(
-                        &label,
-                        text_area_width,
-                        alignment,
-                        selected_symbol_width,
-                    );
-                    if entry_selected_visible {
-                        let prefix = if Some(idx) == selected_idx {
-                            highlight_symbol.to_string()
-                        } else {
-                            " ".repeat(highlight_symbol.chars().count())
-                        };
-                        display_text = format!("{}{}", prefix, display_text);
-                    }
+                    display_text = format!("{}{}", prefix, display_text);
+                }
 
-                    let mut row_style = normal_entry_style;
-                    if item.meta.active {
-                        row_style = row_style.patch(config.meta.active.style());
-                    }
-                    if item.meta.urgent {
-                        row_style = row_style
-                            .patch(config.meta.urgent.style())
-                            .add_modifier(Modifier::BOLD);
-                    }
+                let item = ListItemParams {
+                    config,
+                    is_selected: Some(idx) == selected_idx,
+                    entry: GradientColors {
+                        fg: &entry_fg_colors,
+                        bg: &entry_bg_colors,
+                        angle: config.entry.gradient_angle,
+                    },
+                    selected: GradientColors {
+                        fg: &selected_fg_colors,
+                        bg: &selected_bg_colors,
+                        angle: config.entry_selected.gradient_angle,
+                    },
+                    full_row_width,
+                    row_style: normal_entry_style,
+                    entry_style,
+                    fill_row: false,
+                };
+                build_list_item(&display_text, &item)
+            })
+            .collect()
+    } else if app.mode == AppMode::ScriptResults {
+        app.script_items
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                let visible_title = item.meta.display.as_deref().unwrap_or(&item.title);
+                let label = visible_title.to_string();
+                let alignment = if item.meta.center {
+                    TextAlignment::Center
+                } else {
+                    config.text.alignment()
+                };
+                let mut display_text =
+                    aligned_text(&label, text_area_width, alignment, selected_symbol_width);
+                if entry_selected_visible {
+                    let prefix = if Some(idx) == selected_idx {
+                        highlight_symbol.to_string()
+                    } else {
+                        " ".repeat(highlight_symbol.chars().count())
+                    };
+                    display_text = format!("{}{}", prefix, display_text);
+                }
 
-                    build_list_item(
-                        &display_text,
-                        config,
-                        Some(idx) == selected_idx,
-                        &entry_fg_colors,
-                        &entry_bg_colors,
-                        &selected_fg_colors,
-                        &selected_bg_colors,
-                        config.entry.gradient_angle,
-                        config.entry_selected.gradient_angle,
-                        full_row_width,
-                        row_style,
-                        entry_style,
-                        item.meta.active,
-                    )
-                })
-                .collect()
-        } else {
-            app.filtered_files
-                .iter()
-                .enumerate()
-                .map(|(idx, file)| {
-                    let mut display_text = aligned_text(
-                        file,
-                        text_area_width,
-                        config.text.alignment(),
-                        selected_symbol_width,
-                    );
-                    if entry_selected_visible {
-                        let prefix = if Some(idx) == selected_idx {
-                            highlight_symbol.to_string()
-                        } else {
-                            " ".repeat(highlight_symbol.chars().count())
-                        };
-                        display_text = format!("{}{}", prefix, display_text);
-                    }
+                let mut row_style = normal_entry_style;
+                if item.meta.active {
+                    row_style = row_style.patch(config.meta.active.style());
+                }
+                if item.meta.urgent {
+                    row_style = row_style
+                        .patch(config.meta.urgent.style())
+                        .add_modifier(Modifier::BOLD);
+                }
 
-                    build_list_item(
-                        &display_text,
-                        config,
-                        Some(idx) == selected_idx,
-                        &entry_fg_colors,
-                        &entry_bg_colors,
-                        &selected_fg_colors,
-                        &selected_bg_colors,
-                        config.entry.gradient_angle,
-                        config.entry_selected.gradient_angle,
-                        full_row_width,
-                        normal_entry_style,
-                        entry_style,
-                        false,
-                    )
-                })
-                .collect()
-        };
+                let item = ListItemParams {
+                    config,
+                    is_selected: Some(idx) == selected_idx,
+                    entry: GradientColors {
+                        fg: &entry_fg_colors,
+                        bg: &entry_bg_colors,
+                        angle: config.entry.gradient_angle,
+                    },
+                    selected: GradientColors {
+                        fg: &selected_fg_colors,
+                        bg: &selected_bg_colors,
+                        angle: config.entry_selected.gradient_angle,
+                    },
+                    full_row_width,
+                    row_style,
+                    entry_style,
+                    fill_row: item.meta.active,
+                };
+                build_list_item(&display_text, &item)
+            })
+            .collect()
+    } else {
+        app.filtered_files
+            .iter()
+            .enumerate()
+            .map(|(idx, file)| {
+                let mut display_text = aligned_text(
+                    file,
+                    text_area_width,
+                    config.text.alignment(),
+                    selected_symbol_width,
+                );
+                if entry_selected_visible {
+                    let prefix = if Some(idx) == selected_idx {
+                        highlight_symbol.to_string()
+                    } else {
+                        " ".repeat(highlight_symbol.chars().count())
+                    };
+                    display_text = format!("{}{}", prefix, display_text);
+                }
+
+                let item = ListItemParams {
+                    config,
+                    is_selected: Some(idx) == selected_idx,
+                    entry: GradientColors {
+                        fg: &entry_fg_colors,
+                        bg: &entry_bg_colors,
+                        angle: config.entry.gradient_angle,
+                    },
+                    selected: GradientColors {
+                        fg: &selected_fg_colors,
+                        bg: &selected_bg_colors,
+                        angle: config.entry_selected.gradient_angle,
+                    },
+                    full_row_width,
+                    row_style: normal_entry_style,
+                    entry_style,
+                    fill_row: false,
+                };
+                build_list_item(&display_text, &item)
+            })
+            .collect()
+    };
 
     let mut list = List::new(items);
     if config.list.section.is_visible() {
         let title = if app.mode == AppMode::AppSelection {
-            config.list.apps_title.as_deref().unwrap_or(" Applications ")
+            config
+                .list
+                .apps_title
+                .as_deref()
+                .unwrap_or(" Applications ")
         } else if app.mode == AppMode::ScriptResults {
             app.script_title.as_deref().unwrap_or(" Scripts ")
         } else {
-            config.list.files_title.as_deref().unwrap_or(" Directories ")
+            config
+                .list
+                .files_title
+                .as_deref()
+                .unwrap_or(" Directories ")
         };
         list = list.block(config.list.section.block_with_title(general, title));
     }
@@ -390,21 +415,36 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn build_list_item(
-    display_text: &str,
-    config: &crate::config::AppConfig,
+struct GradientColors<'a> {
+    fg: &'a [Color],
+    bg: &'a [Color],
+    angle: u16,
+}
+
+struct ListItemParams<'a> {
+    config: &'a crate::config::AppConfig,
     is_selected: bool,
-    entry_fg_colors: &[Color],
-    entry_bg_colors: &[Color],
-    selected_fg_colors: &[Color],
-    selected_bg_colors: &[Color],
-    entry_angle: u16,
-    selected_angle: u16,
+    entry: GradientColors<'a>,
+    selected: GradientColors<'a>,
     full_row_width: u16,
     row_style: Style,
     entry_style: Style,
     fill_row: bool,
-) -> ListItem<'static> {
+}
+
+fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'static> {
+    let entry_fg_colors = item.entry.fg;
+    let entry_bg_colors = item.entry.bg;
+    let entry_angle = item.entry.angle;
+    let selected_fg_colors = item.selected.fg;
+    let selected_bg_colors = item.selected.bg;
+    let selected_angle = item.selected.angle;
+    let is_selected = item.is_selected;
+    let fill_row = item.fill_row;
+    let full_row_width = item.full_row_width;
+    let row_style = item.row_style;
+    let entry_style = item.entry_style;
+    let config = item.config;
     if !is_selected || !config.entry_selected.is_visible() {
         let rendered_text = if fill_row {
             pad_to_width(display_text, full_row_width as usize)
@@ -423,7 +463,14 @@ fn build_list_item(
                         let fg = if entry_fg_colors.len() == 1 {
                             entry_fg_colors[0]
                         } else {
-                            gradient_color_at_point(entry_fg_colors, entry_angle, idx as u16, 0, width, 1)
+                            gradient_color_at_point(
+                                entry_fg_colors,
+                                entry_angle,
+                                idx as u16,
+                                0,
+                                width,
+                                1,
+                            )
                         };
                         style = style.fg(fg);
                     }
@@ -431,7 +478,14 @@ fn build_list_item(
                         let bg = if entry_bg_colors.len() == 1 {
                             entry_bg_colors[0]
                         } else {
-                            gradient_color_at_point(entry_bg_colors, entry_angle, idx as u16, 0, width, 1)
+                            gradient_color_at_point(
+                                entry_bg_colors,
+                                entry_angle,
+                                idx as u16,
+                                0,
+                                width,
+                                1,
+                            )
                         };
                         style = style.bg(bg);
                     }
@@ -442,7 +496,8 @@ fn build_list_item(
             return ListItem::new(Text::from(Line::from(spans))).style(entry_style);
         }
 
-        return ListItem::new(Text::from(Span::styled(rendered_text, row_style))).style(entry_style);
+        return ListItem::new(Text::from(Span::styled(rendered_text, row_style)))
+            .style(entry_style);
     }
 
     let selected_text = if config.entry_selected.full_width_highlight.unwrap_or(true) || fill_row {
@@ -463,7 +518,14 @@ fn build_list_item(
                     let fg = if selected_fg_colors.len() == 1 {
                         selected_fg_colors[0]
                     } else {
-                        gradient_color_at_point(selected_fg_colors, selected_angle, idx as u16, 0, width, 1)
+                        gradient_color_at_point(
+                            selected_fg_colors,
+                            selected_angle,
+                            idx as u16,
+                            0,
+                            width,
+                            1,
+                        )
                     };
                     style = style.fg(fg);
                 }
@@ -471,7 +533,14 @@ fn build_list_item(
                     let bg = if selected_bg_colors.len() == 1 {
                         selected_bg_colors[0]
                     } else {
-                        gradient_color_at_point(selected_bg_colors, selected_angle, idx as u16, 0, width, 1)
+                        gradient_color_at_point(
+                            selected_bg_colors,
+                            selected_angle,
+                            idx as u16,
+                            0,
+                            width,
+                            1,
+                        )
                     };
                     style = style.bg(bg);
                 }
@@ -515,7 +584,8 @@ fn apply_section_border_colors(
             cell.set_fg(top_color);
         }
 
-        let bottom_color = gradient_color_at_point(&colors, angle, rel_x, height - 1, width, height);
+        let bottom_color =
+            gradient_color_at_point(&colors, angle, rel_x, height - 1, width, height);
         if let Some(cell) = buffer.cell_mut((x, bottom)) {
             cell.set_fg(bottom_color);
         }
@@ -564,16 +634,14 @@ fn gradient_color_at_point(
     let segment_index = segment_index.min(colors.len() - 2);
     let local_factor = segment_progress - segment_index as f32;
 
-    interpolate_color(colors[segment_index], colors[segment_index + 1], local_factor)
+    interpolate_color(
+        colors[segment_index],
+        colors[segment_index + 1],
+        local_factor,
+    )
 }
 
-fn gradient_factor(
-    angle: u16,
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-) -> f32 {
+fn gradient_factor(angle: u16, x: u16, y: u16, width: u16, height: u16) -> f32 {
     let max_x = width.saturating_sub(1).max(1) as f32;
     let max_y = height.saturating_sub(1).max(1) as f32;
 
@@ -643,11 +711,11 @@ fn aligned_text(
 fn interpolate_color(c1: Color, c2: Color, factor: f32) -> Color {
     let (r1, g1, b1) = color_to_rgb(c1);
     let (r2, g2, b2) = color_to_rgb(c2);
-    
+
     let r = (r1 as f32 + (r2 as f32 - r1 as f32) * factor) as u8;
     let g = (g1 as f32 + (g2 as f32 - g1 as f32) * factor) as u8;
     let b = (b1 as f32 + (b2 as f32 - b1 as f32) * factor) as u8;
-    
+
     Color::Rgb(r, g, b)
 }
 

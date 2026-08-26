@@ -1,8 +1,8 @@
-# qst Docs
+# Qst Docs
 
-Here you will find documentation for qst features, configuration, and plugin integration.
+Here you will find documentation for qst features, configuration, and script integration.
 
-Plugin packs (scripts, aliases, community catalog) are documented in:
+Script packs (scripts, aliases, community catalog) are documented in:
 
 - https://github.com/gitanelyon/awesome-qst
 
@@ -58,7 +58,7 @@ qst also supports launch-time flags:
 - `-v, --version`
   - Print the qst version.
 
-`--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the plugin docs.
+`--list-scripts` reads each script's metadata header from the script source file, matching the `qst! meta ...` convention used by the script docs.
 
 ## Logging
 
@@ -102,7 +102,7 @@ Each session starts with a fresh `qst.log`. The previous session's log is automa
 
 ### Session cleanup
 
-Archived session logs older than `log_retention_days` are automatically pruned on each startup. This applies to both the main sessions directory and per-plugin session directories.
+Archived session logs older than `log_retention_days` are automatically pruned on each startup. This applies to both the main sessions directory and per-script session directories.
 
 Configured in `~/.config/qst/config.toml`:
 
@@ -174,11 +174,30 @@ Behavior:
 - `Ctrl+d`: toggle debug overlay
 - `Esc`: quit
 
-## Plugin integration notes
+## Script integration notes
 
 - qst is host/runtime.
-- Script plugins live in `~/.config/qst/scripts/`.
-- Protocol, directives, and setup guidance are in `https://github.com/gitanelyon/awesome-qst`.
+- Scripts live in `~/.config/qst/scripts/`.
+- The script API protocol is documented in [API.md](API.md).
+- The script catalog and community scripts are in https://github.com/gitanelyon/awesome-qst.
+
+## Code architecture
+
+- `src/main.rs`
+  - Terminal lifecycle, event loop, key handling.
+- `src/app.rs`
+  - App state machine, filtering, file explorer, launch argument handling, command spawning.
+- `src/ui.rs`
+  - Rendering and list presentation.
+- `src/config.rs`
+  - `config.toml` loading and defaults.
+- `src/history.rs`
+  - App usage/favorites history persistence.
+
+Notable implementation points:
+
+- File explorer filtering lives in `App::update_filter` + `App::list_completions`.
+- Script protocol parsing lives in `App::parse_script_output`.
 
 ## XDG app scan paths
 

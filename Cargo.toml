@@ -6,7 +6,7 @@ edition = "2024"
 description = "A Community Driven CLI Quick Script Tool"
 license = "MIT"
 repository = "https://github.com/gitanelyon/qst"
-documentation = "https://github.com/GitanElyon/awesome-qst/blob/main/DOCS.md"
+documentation = "https://github.com/GitanElyon/qst/blob/main/API.md"
 readme = "README.md"
 keywords = ["tui", "tool", "workflow", "launcher", "community"]
 
