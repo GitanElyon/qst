@@ -1408,21 +1408,45 @@ impl App {
     }
 
     fn load_scripts(aliases: &mut HashMap<String, String>) -> Vec<ScriptPlugin> {
-        let mut scripts = Vec::new();
-
         let Some(dir) = Self::scripts_dir() else {
-            return scripts;
+            return Vec::new();
         };
 
-        let Ok(entries) = fs::read_dir(&dir) else {
-            return scripts;
+        Self::load_scripts_from(&dir, aliases)
+    }
+
+    fn collect_script_files(dir: &Path, files: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
         };
 
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else {
+            let Ok(file_type) = entry.file_type() else {
                 continue;
             };
+
+            if file_type.is_dir() {
+                Self::collect_script_files(&path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+
+    fn load_scripts_from(dir: &Path, aliases: &mut HashMap<String, String>) -> Vec<ScriptPlugin> {
+        let mut scripts = Vec::new();
+        let mut files = Vec::new();
+        Self::collect_script_files(dir, &mut files);
+
+        for path in files {
+            let Ok(meta) = fs::metadata(&path) else {
+                continue;
+            };
+
+            if meta.is_dir() {
+                continue;
+            }
 
             let extension = path
                 .extension()
@@ -2563,6 +2587,44 @@ mod tests {
             metadata.description.as_deref(),
             Some("Describes the script")
         );
+    }
+
+    #[test]
+    fn load_scripts_finds_scripts_in_nested_directories() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        let nested = root.join("sub").join("nested");
+        fs::create_dir_all(&nested).unwrap();
+
+        let top = root.join("alpha.sh");
+        fs::write(&top, "#!/bin/sh\necho top\n").unwrap();
+        fs::set_permissions(&top, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(root.join("sub").join("beta.sh"), "#!/bin/sh\necho beta\n").unwrap();
+        fs::write(nested.join("gamma.py"), "print('gamma')\n").unwrap();
+        fs::write(root.join("ignore.txt"), "not a script\n").unwrap();
+        fs::write(nested.join("delta.sh"), "#!/bin/sh\necho delta\n").unwrap();
+        fs::set_permissions(nested.join("delta.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut aliases = HashMap::new();
+        aliases.insert("alpha".to_string(), "a!".to_string());
+
+        let scripts = App::load_scripts_from(&root, &mut aliases);
+
+        let ids: Vec<&str> = scripts.iter().map(|script| script.id.as_str()).collect();
+        assert!(ids.contains(&"alpha"));
+        assert!(ids.contains(&"beta"));
+        assert!(ids.contains(&"gamma"));
+        assert!(ids.contains(&"delta"));
+        assert!(!ids.contains(&"ignore"));
+
+        let alpha = scripts.iter().find(|script| script.id == "alpha").unwrap();
+        assert_eq!(alpha.trigger.as_deref(), Some("a!"));
+        assert!(alpha.path.ends_with("alpha.sh"));
+        assert!(!aliases.contains_key("alpha"));
+
+        let delta = scripts.iter().find(|script| script.id == "delta").unwrap();
+        assert!(delta.path.ends_with("sub/nested/delta.sh"));
     }
 
     #[test]
