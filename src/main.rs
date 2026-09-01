@@ -19,6 +19,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 enum CliAction {
     Interactive,
@@ -158,7 +159,9 @@ fn main() -> Result<()> {
         terminal.draw(|f| draw(f, &mut app))?;
         debug!("Frame drawn");
 
-        if let Event::Key(key) = event::read()? {
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
             debug!("Key event: {:?}", key);
             if key.kind == KeyEventKind::Press {
                 app.total_events += 1;
@@ -218,6 +221,8 @@ fn main() -> Result<()> {
                 }
             }
         }
+
+        app.poll_script_results();
 
         if app.should_quit {
             info!("User requested quit");

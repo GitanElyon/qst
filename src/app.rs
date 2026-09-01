@@ -13,7 +13,7 @@ use std::{
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -130,6 +130,13 @@ struct ScriptPlugin {
     metadata: Option<ScriptMetadata>,
 }
 
+struct ScriptRunResult {
+    generation: u64,
+    script_id: String,
+    payload: String,
+    result: Result<ScriptOutput, String>,
+}
+
 pub struct App {
     pub search_query: String,
     pub search_cursor: usize,
@@ -155,6 +162,12 @@ pub struct App {
     pub debug_frame_ms: f64,
     pub total_events: u64,
     scripts: Vec<ScriptPlugin>,
+    script_tx: mpsc::Sender<ScriptRunResult>,
+    script_rx: mpsc::Receiver<ScriptRunResult>,
+    script_generation: u64,
+    script_results_ready: bool,
+    last_run_key: Option<(String, String)>,
+    force_refresh: bool,
 }
 
 impl App {
@@ -200,6 +213,8 @@ impl App {
             include_str!("../assets/qst.txt").to_string()
         };
 
+        let (script_tx, script_rx) = mpsc::channel();
+
         let mut app = Self {
             search_query: String::new(),
             search_cursor: 0,
@@ -225,6 +240,12 @@ impl App {
             debug_frame_ms: 0.0,
             total_events: 0,
             scripts,
+            script_tx,
+            script_rx,
+            script_generation: 0,
+            script_results_ready: false,
+            last_run_key: None,
+            force_refresh: false,
         };
 
         app.sort_entries();
@@ -795,14 +816,12 @@ impl App {
         self.launch_args = None;
         self.mode = AppMode::AppSelection;
         self.filtered_files.clear();
-        self.script_title = None;
-        self.script_meta = None;
-        self.script_items.clear();
 
+        let force_refresh = std::mem::take(&mut self.force_refresh);
         let query_slice_str = self.search_query.trim().to_string();
         let query_slice = query_slice_str.as_str();
 
-        if self.try_run_script_query(query_slice) {
+        if self.try_run_script_query(query_slice, force_refresh) {
             let count = self.script_items.len();
             if count == 0 {
                 self.list_state.select(None);
@@ -811,6 +830,13 @@ impl App {
             }
             return;
         }
+
+        self.script_title = None;
+        self.script_meta = None;
+        self.script_items.clear();
+        self.script_results_ready = false;
+        self.last_run_key = None;
+        self.script_generation += 1;
 
         if self.config.features.enable_file_explorer && Self::looks_like_path_query(query_slice) {
             let files = self.list_completions(query_slice);
@@ -1562,15 +1588,10 @@ impl App {
         }
     }
 
-    fn try_run_script_query(&mut self, query: &str) -> bool {
-        if query.is_empty() || self.scripts.is_empty() {
-            return false;
-        }
-
+    fn match_script_query(query: &str, scripts: &[ScriptPlugin]) -> Option<(ScriptPlugin, String)> {
         let mut matched: Option<(ScriptPlugin, String)> = None;
 
-        let mut aliases: Vec<&ScriptPlugin> = self
-            .scripts
+        let mut aliases: Vec<&ScriptPlugin> = scripts
             .iter()
             .filter(|script| script.trigger.as_ref().is_some_and(|t| !t.is_empty()))
             .collect();
@@ -1591,7 +1612,7 @@ impl App {
         }
 
         if matched.is_none() {
-            for script in &self.scripts {
+            for script in scripts {
                 if query == script.file_id {
                     matched = Some((script.clone(), String::new()));
                     break;
@@ -1606,11 +1627,11 @@ impl App {
 
         if matched.is_none() {
             let mut stem_counts: HashMap<&str, usize> = HashMap::new();
-            for script in &self.scripts {
+            for script in scripts {
                 *stem_counts.entry(script.id.as_str()).or_insert(0) += 1;
             }
 
-            for script in &self.scripts {
+            for script in scripts {
                 if query == script.id {
                     if stem_counts.get(script.id.as_str()).copied().unwrap_or(0) > 1 {
                         continue;
@@ -1629,7 +1650,15 @@ impl App {
             }
         }
 
-        let Some((script, payload)) = matched else {
+        matched
+    }
+
+    fn try_run_script_query(&mut self, query: &str, force_refresh: bool) -> bool {
+        if query.is_empty() || self.scripts.is_empty() {
+            return false;
+        }
+
+        let Some((script, payload)) = Self::match_script_query(query, &self.scripts) else {
             return false;
         };
 
@@ -1637,24 +1666,82 @@ impl App {
         self.filtered_files.clear();
         self.mode = AppMode::ScriptResults;
 
-        info!("Running script: {} (payload: {})", script.id, payload);
-        match self.run_script(&script, &payload) {
+        let run_key = (script.id.clone(), payload.clone());
+        if !force_refresh
+            && self.script_results_ready
+            && self.last_run_key.as_ref() == Some(&run_key)
+        {
+            debug!(
+                "Skipping script rerun for {} (payload unchanged)",
+                script.id
+            );
+            return true;
+        }
+
+        self.script_title = None;
+        self.script_meta = None;
+        self.script_items.clear();
+        self.script_results_ready = false;
+        self.last_run_key = None;
+
+        self.script_generation += 1;
+        let generation = self.script_generation;
+        info!(
+            "Running script: {} (payload: {}, generation: {})",
+            script.id, payload, generation
+        );
+        let fuzzy_matching_enabled = self.fuzzy_matching_enabled;
+        let timeout = Self::SCRIPT_TIMEOUT;
+        let tx = self.script_tx.clone();
+
+        thread::spawn(move || {
+            let result =
+                App::run_script_with_timeout(&script, &payload, timeout, fuzzy_matching_enabled);
+            let _ = tx.send(ScriptRunResult {
+                generation,
+                script_id: script.id,
+                payload,
+                result,
+            });
+        });
+
+        true
+    }
+
+    pub fn poll_script_results(&mut self) {
+        let mut latest: Option<ScriptRunResult> = None;
+        while let Ok(msg) = self.script_rx.try_recv() {
+            if msg.generation == self.script_generation && self.mode == AppMode::ScriptResults {
+                latest = Some(msg);
+            } else {
+                debug!(
+                    "Discarded stale script result for {} (generation {})",
+                    msg.script_id, msg.generation
+                );
+            }
+        }
+
+        let Some(msg) = latest else {
+            return;
+        };
+
+        match msg.result {
             Ok((title, message, meta, items)) => {
-                debug!("Script {} returned {} items", script.id, items.len());
+                debug!("Script {} returned {} items", msg.script_id, items.len());
                 self.script_meta = meta.clone();
                 self.script_title = title
                     .or_else(|| {
                         meta.and_then(|meta| meta.name)
                             .map(|name| format!(" {} ", name))
                     })
-                    .or_else(|| Some(format!(" {} ", script.id)));
+                    .or_else(|| Some(format!(" {} ", msg.script_id)));
                 self.script_items = items;
                 self.status_message = message;
             }
             Err(err) => {
-                error!("Script {} failed: {}", script.id, err);
+                error!("Script {} failed: {}", msg.script_id, err);
                 self.script_meta = None;
-                self.script_title = Some(format!(" {} ", script.id));
+                self.script_title = Some(format!(" {} ", msg.script_id));
                 self.script_items = vec![ScriptItem {
                     title: format!("Script error: {}", err),
                     value: String::new(),
@@ -1664,7 +1751,13 @@ impl App {
             }
         }
 
-        true
+        self.last_run_key = Some((msg.script_id, msg.payload));
+        self.script_results_ready = true;
+        if self.script_items.is_empty() {
+            self.list_state.select(None);
+        } else {
+            self.list_state.select(self.first_selectable_script_index());
+        }
     }
 
     fn find_script(&self, selector: &str) -> Option<&ScriptPlugin> {
@@ -1707,15 +1800,11 @@ impl App {
         }
     }
 
-    fn run_script(&self, script: &ScriptPlugin, payload: &str) -> Result<ScriptOutput, String> {
-        self.run_script_with_timeout(script, payload, Self::SCRIPT_TIMEOUT)
-    }
-
     fn run_script_with_timeout(
-        &self,
         script: &ScriptPlugin,
         payload: &str,
         timeout: Duration,
+        fuzzy_matching_enabled: bool,
     ) -> Result<ScriptOutput, String> {
         let mut command = if let Some(interpreter) = script.interpreter {
             let mut command = Command::new(interpreter);
@@ -1779,7 +1868,7 @@ impl App {
             &stdout,
             payload,
             &script.id,
-            self.fuzzy_matching_enabled,
+            fuzzy_matching_enabled,
         ))
     }
 
@@ -2130,6 +2219,7 @@ impl App {
                     if let Some(mut child) = pending_execute.take() {
                         let _ = child.wait();
                     }
+                    self.force_refresh = true;
                     self.update_filter();
                     true
                 }
@@ -2327,6 +2417,7 @@ mod tests {
     }
 
     fn test_app() -> App {
+        let (script_tx, script_rx) = mpsc::channel();
         App {
             search_query: String::new(),
             search_cursor: 0,
@@ -2352,6 +2443,12 @@ mod tests {
             debug_frame_ms: 0.0,
             total_events: 0,
             scripts: Vec::new(),
+            script_tx,
+            script_rx,
+            script_generation: 0,
+            script_results_ready: false,
+            last_run_key: None,
+            force_refresh: false,
         }
     }
 
@@ -2540,7 +2637,6 @@ mod tests {
         fs::write(&script_path, "#!/bin/sh\nsleep 1\n").unwrap();
         fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
 
-        let app = test_app();
         let script = ScriptPlugin {
             id: "hang".to_string(),
             file_id: "hang.sh".to_string(),
@@ -2550,11 +2646,98 @@ mod tests {
             metadata: None,
         };
 
-        let err = app
-            .run_script_with_timeout(&script, "", Duration::from_millis(50))
+        let err = App::run_script_with_timeout(&script, "", Duration::from_millis(50), true)
             .expect_err("script should time out");
 
         assert!(err.contains("timed out"));
+    }
+
+    #[test]
+    fn async_script_runs_and_skips_identical_payload() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("echo.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\necho 'qst! title Echo '\necho hello\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut app = test_app();
+        app.scripts.push(ScriptPlugin {
+            id: "echo".to_string(),
+            file_id: "echo.sh".to_string(),
+            path: script_path,
+            trigger: None,
+            interpreter: None,
+            metadata: None,
+        });
+
+        assert!(app.try_run_script_query("echo", false));
+        assert_eq!(app.script_generation, 1);
+        assert!(app.script_items.is_empty());
+
+        let mut applied = false;
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(20));
+            app.poll_script_results();
+            if app.script_results_ready {
+                applied = true;
+                break;
+            }
+        }
+        assert!(applied, "script result should arrive");
+
+        assert_eq!(app.script_title.as_deref(), Some(" Echo "));
+        assert_eq!(app.script_items.len(), 1);
+        assert_eq!(app.script_items[0].title, "hello");
+        assert_eq!(app.last_run_key, Some(("echo".to_string(), String::new())));
+
+        let generation = app.script_generation;
+        assert!(app.try_run_script_query("echo ", false));
+        assert_eq!(
+            app.script_generation, generation,
+            "identical payload should skip rerun"
+        );
+        assert_eq!(app.script_items.len(), 1);
+
+        assert!(app.try_run_script_query("echo ", true));
+        assert_eq!(
+            app.script_generation,
+            generation + 1,
+            "force refresh should rerun"
+        );
+    }
+
+    #[test]
+    fn stale_script_results_are_discarded() {
+        let mut app = test_app();
+        app.mode = AppMode::ScriptResults;
+
+        let _ = app.script_tx.send(ScriptRunResult {
+            generation: app.script_generation + 1,
+            script_id: "echo".to_string(),
+            payload: String::new(),
+            result: Ok((
+                Some(" Stale ".to_string()),
+                None,
+                None,
+                vec![ScriptItem {
+                    title: "stale".to_string(),
+                    value: "stale".to_string(),
+                    actions: vec![ScriptAction::None],
+                    meta: ScriptRowMeta::default(),
+                }],
+            )),
+        });
+
+        app.poll_script_results();
+
+        assert!(app.script_items.is_empty());
+        assert!(!app.script_results_ready);
     }
 
     #[test]
