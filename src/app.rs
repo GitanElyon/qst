@@ -4,22 +4,17 @@ use dirs::config_dir;
 use freedesktop_desktop_entry::{Iter, default_paths, get_languages_from_env};
 use log::{debug, error, info, warn};
 use ratatui::widgets::ListState;
-use rustls::{ClientConfig, ClientConnection, Stream};
 use std::{
     collections::{HashMap, VecDeque},
     fs,
-    io::{self, Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    io::{self, Read},
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, mpsc},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
-
-const REMOTE_LOADER_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/GitanElyon/awesome-qst/main/scripts/loader.sh";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -174,7 +169,6 @@ impl App {
     const SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
     pub fn new(config: AppConfig, status_message: Option<String>, show_debug: bool) -> Self {
-        Self::ensure_loader_script_installed();
         let (mut script_aliases, mut app_aliases) = Self::load_aliases();
         let history = History::load();
         let scripts = Self::load_scripts(&mut script_aliases);
@@ -1310,84 +1304,6 @@ impl App {
         dir.push("qst");
         dir.push("scripts");
         Some(dir)
-    }
-
-    fn ensure_loader_script_installed() {
-        let Some(dir) = Self::scripts_dir() else {
-            return;
-        };
-
-        let loader_path = dir.join("loader.sh");
-        if loader_path.exists() {
-            Self::ensure_executable(&loader_path);
-            return;
-        }
-
-        if fs::create_dir_all(&dir).is_err() {
-            return;
-        }
-
-        let loader_script = Self::fetch_remote_loader_script()
-            .unwrap_or_else(|| "#!/bin/sh\necho \"qst! meta \"\ncat \"$@\"\n".to_string());
-
-        if fs::write(&loader_path, loader_script).is_ok() {
-            Self::ensure_executable(&loader_path);
-        }
-    }
-
-    fn fetch_remote_loader_script() -> Option<String> {
-        rustls_graviola::default_provider().install_default().ok()?;
-
-        let url = REMOTE_LOADER_SCRIPT_URL.strip_prefix("https://")?;
-        let (host, rest) = url.split_once('/')?;
-        let path = format!("/{rest}");
-
-        let addr = (host, 443).to_socket_addrs().ok()?.next()?;
-        let mut tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
-        tcp.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth(),
-        );
-
-        let server_name = rustls::pki_types::ServerName::try_from(host).ok()?;
-        let mut tls_conn = ClientConnection::new(config, server_name).ok()?;
-        let mut tls_stream = Stream::new(&mut tls_conn, &mut tcp);
-
-        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-        tls_stream.write_all(request.as_bytes()).ok()?;
-        tls_stream.flush().ok()?;
-
-        let mut response = Vec::new();
-        tls_stream.read_to_end(&mut response).ok()?;
-        let response = String::from_utf8(response).ok()?;
-
-        let status = response.lines().next()?;
-        let code = status.split_whitespace().nth(1)?;
-        if !code.starts_with('2') {
-            return None;
-        }
-
-        let body = response.split("\r\n\r\n").nth(1)?;
-        let body = body.trim().to_string();
-        if body.is_empty() { None } else { Some(body) }
-    }
-
-    fn ensure_executable(path: &Path) {
-        let Ok(metadata) = fs::metadata(path) else {
-            return;
-        };
-
-        let mut permissions = metadata.permissions();
-        let mode = permissions.mode();
-        if mode & 0o111 != 0o111 {
-            permissions.set_mode(mode | 0o111);
-            let _ = fs::set_permissions(path, permissions);
-        }
     }
 
     fn script_interpreter_for_extension(ext: &str) -> Option<&'static str> {
@@ -2808,23 +2724,5 @@ mod tests {
 
         let delta = scripts.iter().find(|script| script.id == "delta").unwrap();
         assert!(delta.path.ends_with("sub/nested/delta.sh"));
-    }
-
-    #[test]
-    fn ensure_executable_adds_execute_bits_without_rewriting_content() {
-        let root = unique_temp_path();
-        let _cleanup = TempDirCleanup(root.clone());
-
-        fs::create_dir_all(&root).unwrap();
-        let script_path = root.join("loader.sh");
-        fs::write(&script_path, "#!/bin/sh\necho loader\n").unwrap();
-
-        App::ensure_executable(&script_path);
-
-        let content = fs::read_to_string(&script_path).unwrap();
-        let mode = fs::metadata(&script_path).unwrap().permissions().mode();
-
-        assert_eq!(content, "#!/bin/sh\necho loader\n");
-        assert_eq!(mode & 0o111, 0o111);
     }
 }
