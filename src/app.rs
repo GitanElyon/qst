@@ -1,3 +1,4 @@
+use crate::catalog;
 use crate::config::AppConfig;
 use crate::history::History;
 use dirs::config_dir;
@@ -261,6 +262,16 @@ impl App {
                 metadata: script.metadata.clone(),
             })
             .collect()
+    }
+
+    pub fn refresh_catalog_in_background(&self) {
+        if catalog::catalog_is_fresh() {
+            return;
+        }
+        info!("Refreshing script catalog in the background");
+        thread::spawn(|| {
+            let _ = catalog::refresh_catalog(false);
+        });
     }
 
     pub fn launch_program_by_name(&mut self, program_name: &str) -> Result<(), String> {
@@ -1321,7 +1332,7 @@ impl App {
         }
     }
 
-    fn normalize_alias_key(key: &str) -> String {
+    pub(crate) fn normalize_alias_key(key: &str) -> String {
         let normalized = key.trim();
         if normalized.is_empty() {
             return String::new();
@@ -1338,7 +1349,7 @@ impl App {
         normalized.to_string()
     }
 
-    fn read_script_metadata_from_source(path: &Path) -> Option<ScriptMetadata> {
+    pub(crate) fn read_script_metadata_from_source(path: &Path) -> Option<ScriptMetadata> {
         let contents = fs::read_to_string(path).ok()?;
 
         contents.lines().find_map(|line| {

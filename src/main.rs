@@ -1,4 +1,5 @@
 mod app;
+mod catalog;
 mod config;
 mod history;
 mod logger;
@@ -32,6 +33,10 @@ enum CliAction {
     ClearFavorites,
     LaunchProgram(String),
     LaunchScript(String),
+    InstallScript(String),
+    RemoveScript(String),
+    UpdateScript(String),
+    RefreshCatalog,
 }
 
 struct CliOptions {
@@ -99,6 +104,60 @@ fn main() -> Result<()> {
             println!("Cleared qst favorite apps.");
             return Ok(());
         }
+        CliAction::RefreshCatalog => {
+            info!("Refreshing script catalog");
+            catalog::refresh_catalog(true).map_err(anyhow::Error::msg)?;
+            println!("Catalog refreshed.");
+            return Ok(());
+        }
+        CliAction::InstallScript(script_name) => {
+            let entry = catalog::lookup_catalog(&script_name).map_err(anyhow::Error::msg)?;
+            catalog::install_script(&entry, &catalog::CatalogSource::default())
+                .map_err(anyhow::Error::msg)?;
+            info!("Installed script: {}", entry.file);
+            let version_note = if entry.version.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", entry.version)
+            };
+            println!("Installed {}{version_note}", entry.file);
+            return Ok(());
+        }
+        CliAction::RemoveScript(script_name) => {
+            let file =
+                catalog::resolve_installed_script(&script_name).map_err(anyhow::Error::msg)?;
+            catalog::remove_script(&file).map_err(anyhow::Error::msg)?;
+            info!("Removed script: {file}");
+            println!("Removed {file}");
+            return Ok(());
+        }
+        CliAction::UpdateScript(script_name) => {
+            let entry = catalog::lookup_catalog(&script_name).map_err(anyhow::Error::msg)?;
+            if !catalog::installed_script_exists(&entry.file) {
+                return Err(anyhow!("{} is not installed — use --install", entry.file));
+            }
+            let outdated = match catalog::installed_version(&entry.file) {
+                Some(installed) if !installed.is_empty() && !entry.version.is_empty() => {
+                    catalog::version_less_than(&installed, &entry.version)
+                }
+                _ => true,
+            };
+            if outdated {
+                catalog::install_script(&entry, &catalog::CatalogSource::default())
+                    .map_err(anyhow::Error::msg)?;
+                info!("Updated script: {}", entry.file);
+                let version_note = if entry.version.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", entry.version)
+                };
+                println!("Updated {}{version_note}", entry.file);
+            } else {
+                info!("Script already up to date: {}", entry.file);
+                println!("{} is already up to date ({})", entry.file, entry.version);
+            }
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -120,6 +179,7 @@ fn main() -> Result<()> {
     match options.action {
         CliAction::Interactive => {
             info!("Entering interactive mode");
+            app.refresh_catalog_in_background();
         }
         CliAction::ListPrograms => {
             info!("Listing programs");
@@ -146,7 +206,11 @@ fn main() -> Result<()> {
         | CliAction::Version
         | CliAction::GenerateConfig
         | CliAction::ClearHistory
-        | CliAction::ClearFavorites => unreachable!(),
+        | CliAction::ClearFavorites
+        | CliAction::InstallScript(_)
+        | CliAction::RemoveScript(_)
+        | CliAction::UpdateScript(_)
+        | CliAction::RefreshCatalog => unreachable!(),
     }
 
     enable_raw_mode()?;
@@ -281,6 +345,25 @@ fn parse_cli_options(args: impl IntoIterator<Item = String>) -> Result<CliOption
                 };
                 set_cli_action(&mut action, CliAction::LaunchScript(script_name))?;
             }
+            "--install" => {
+                let Some(script_name) = args.next() else {
+                    return Err(anyhow!("--install requires a script name"));
+                };
+                set_cli_action(&mut action, CliAction::InstallScript(script_name))?;
+            }
+            "--remove" => {
+                let Some(script_name) = args.next() else {
+                    return Err(anyhow!("--remove requires a script name"));
+                };
+                set_cli_action(&mut action, CliAction::RemoveScript(script_name))?;
+            }
+            "--update" => {
+                let Some(script_name) = args.next() else {
+                    return Err(anyhow!("--update requires a script name"));
+                };
+                set_cli_action(&mut action, CliAction::UpdateScript(script_name))?;
+            }
+            "--refresh-catalog" => set_cli_action(&mut action, CliAction::RefreshCatalog)?,
             "--log-level" => {
                 let Some(value) = args.next() else {
                     return Err(anyhow!(
@@ -357,7 +440,7 @@ fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn print_help() {
-    println!("Qst - An Application Launcher");
+    println!("Qst - Quick Script Launcher");
     println!("Usage: qst [OPTIONS]");
     println!();
     println!("Options:");
@@ -373,6 +456,10 @@ fn print_help() {
     println!("  --no-fuzzy              Launch without fuzzy finding");
     println!("  -p, --program <name>    Launch a program directly using fuzzy matching");
     println!("  -s, --script <script>   Open that script by default when qst starts");
+    println!("  --install <script>      Install a script from the community catalog");
+    println!("  --remove <script>       Remove an installed script");
+    println!("  --update <script>       Update an installed script to the newest version");
+    println!("  --refresh-catalog       Refresh the cached script catalog");
     println!("  --list-programs         Print all launchable programs");
     println!("  --list-scripts          Print all scripts and their metadata");
     println!("  -v, --version           Print version information");

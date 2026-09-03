@@ -29,6 +29,13 @@ qst
 
 Thats it! You can then start browsing apps, or install scripts from the community catalog at [awesome-qst](https://github.com/gitanelyon/awesome-qst).
 
+To get started with scripts, install `loader.sh`:
+```bash
+qst --install loader.sh 
+```
+
+You can then run it by entering `loader` in Qst's search box which show a list of plugins you can browse, install and manage.
+
 ## Install
 
 Via Nix (recommended):
@@ -71,7 +78,16 @@ bind = $mod, space, exec, [float; size 350 400] $terminal -e qst
 
 qst scripts extend the launcher with custom functionality — system info, todo lists, calculators, clipboard history, and more. Scripts live in `~/.config/qst/scripts/` and are triggered by typing their name.
 
-With `loader.sh` installed, browse and install community scripts right from qst:
+Install and manage scripts from the community catalog directly from the command line:
+
+```
+qst --install <script>    install a script from the catalog
+qst --update <script>     update an installed script to the newest version
+qst --remove <script>     remove an installed script
+qst --refresh-catalog     refresh the cached catalog
+```
+
+For example, `qst --install loader.sh` installs the interactive script browser. With it, browse and install community scripts right from qst:
 
 ```
 loader                    browse the catalog
