@@ -6,9 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-26
+
 ### Added
 
 - CI workflow running `fmt`, `clippy`, `test`, and release builds on every push and pull request.
+- `CONTRIBUTING.md` with contribution guidelines.
 
 ### Fixed
 
@@ -18,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Standardized terminology: the docs and bundled scripts now consistently refer to `scripts` instead of mixing `script`, `plugin`, and `extension`.
+- Moved the script API reference into the main repository (`API.md`), where it previously lived in `awesome-qst`.
+- Refactored the README for clarity and structure; added a screenshot.
+- Converted the qst logo from ASCII art to an SVG path.
+- The development shell (`flake.nix`) now includes `clippy` and `rustfmt`.
 
 ## [0.11.0] - 2026-07-18
 
