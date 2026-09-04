@@ -4,11 +4,33 @@ All notable changes to Qst are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-09-04
+
+### Added
+
+- Scripts are loaded from directories recursively.
+- Scripts execute asynchronously in the background; identical payloads are skipped.
+- Qst maintains its own script catalog, refreshed automatically on open.
+- New script management arguments:
+  - `--install <script>`
+  - `--remove <script>`
+  - `--update <script>`
+  - `--refresh-catalog`
+
+### Changed
+
+- Script names and aliases now require a delimiting space before a payload (`v! clip`, not `v!clip`).
+
+### Removed
+
+- Automatic download of `loader.sh`.
+
+## [0.12.0] - 2026-08-26
 
 ### Added
 
 - CI workflow running `fmt`, `clippy`, `test`, and release builds on every push and pull request.
+- `CONTRIBUTING.md` with contribution guidelines.
 
 ### Fixed
 
@@ -18,6 +40,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Standardized terminology: the docs and bundled scripts now consistently refer to `scripts` instead of mixing `script`, `plugin`, and `extension`.
+- Moved the script API reference into the main repository (`API.md`), where it previously lived in `awesome-qst`.
+- Refactored the README for clarity and structure; added a screenshot.
+- Converted the qst logo from ASCII art to an SVG path.
+- The development shell (`flake.nix`) now includes `clippy` and `rustfmt`.
 
 ## [0.11.0] - 2026-07-18
 
