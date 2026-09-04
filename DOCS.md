@@ -17,7 +17,6 @@ Script integration uses:
 
 - `~/.config/qst/scripts/`
   - executable `*.sh` scripts discovered dynamically.
-  - Note: qst ships a built-in `loader.sh` helper and will seed it into this directory on first run. You can use `loader.sh` to browse and install scripts from the `awesome-qst` catalog.
 - `~/.config/qst/alias.toml`
   - optional trigger aliases for script names.
 
@@ -25,7 +24,7 @@ Script integration uses:
 
 ## Command-line options
 
-qst also supports launch-time flags:
+Qst also supports launch-time flags:
 
 - `--config <path>`
   - Use a config file from a custom path.
@@ -43,6 +42,14 @@ qst also supports launch-time flags:
   - Launch a program directly using fuzzy matching and exit without opening the UI.
 - `-s, --script <script>`
   - Start qst with that script opened by default.
+- `--install <script>`
+  - Install a script from the community catalog (resolved by file name, script name, or catalog name).
+- `--remove <script>`
+  - Remove an installed script and its alias entry.
+- `--update <script>`
+  - Update an installed script to the newest catalog version.
+- `--refresh-catalog`
+  - Force refresh the cached script catalog.
 - `--list-programs`
   - Print all launchable desktop programs.
 - `--list-scripts`

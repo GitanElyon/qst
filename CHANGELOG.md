@@ -4,7 +4,28 @@ All notable changes to Qst are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-09-04
+
+### Added
+
+- Scripts are loaded from directories recursively.
+- Scripts execute asynchronously in the background; identical payloads are skipped.
+- Qst maintains its own script catalog, refreshed automatically on open.
+- New script management arguments:
+  - `--install <script>`
+  - `--remove <script>`
+  - `--update <script>`
+  - `--refresh-catalog`
+
+### Changed
+
+- Script names and aliases now require a delimiting space before a payload (`v! clip`, not `v!clip`).
+
+### Removed
+
+- Automatic download of `loader.sh`.
+
+## [0.12.0] - 2026-08-26
 
 ## [0.12.0] - 2026-08-26
 
