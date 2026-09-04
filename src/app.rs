@@ -1515,6 +1515,10 @@ impl App {
         }
     }
 
+    fn matches_script_name(query: &str, name: &str) -> bool {
+        query == name || query.starts_with(&format!("{name} "))
+    }
+
     fn match_script_query(query: &str, scripts: &[ScriptPlugin]) -> Option<(ScriptPlugin, String)> {
         let mut matched: Option<(ScriptPlugin, String)> = None;
 
@@ -1532,7 +1536,9 @@ impl App {
 
         for script in aliases {
             let trigger = script.trigger.as_ref().expect("filtered non-empty trigger");
-            if let Some(rest) = query.strip_prefix(trigger) {
+            if Self::matches_script_name(query, trigger)
+                && let Some(rest) = query.strip_prefix(trigger)
+            {
                 matched = Some((script.clone(), rest.trim_start().to_string()));
                 break;
             }
@@ -1540,12 +1546,9 @@ impl App {
 
         if matched.is_none() {
             for script in scripts {
-                if query == script.file_id {
-                    matched = Some((script.clone(), String::new()));
-                    break;
-                }
-
-                if let Some(rest) = query.strip_prefix(&format!("{} ", script.file_id)) {
+                if Self::matches_script_name(query, &script.file_id)
+                    && let Some(rest) = query.strip_prefix(&script.file_id)
+                {
                     matched = Some((script.clone(), rest.trim_start().to_string()));
                     break;
                 }
@@ -1559,18 +1562,13 @@ impl App {
             }
 
             for script in scripts {
-                if query == script.id {
-                    if stem_counts.get(script.id.as_str()).copied().unwrap_or(0) > 1 {
-                        continue;
-                    }
-                    matched = Some((script.clone(), String::new()));
-                    break;
+                if stem_counts.get(script.id.as_str()).copied().unwrap_or(0) > 1 {
+                    continue;
                 }
 
-                if let Some(rest) = query.strip_prefix(&format!("{} ", script.id)) {
-                    if stem_counts.get(script.id.as_str()).copied().unwrap_or(0) > 1 {
-                        continue;
-                    }
+                if Self::matches_script_name(query, &script.id)
+                    && let Some(rest) = query.strip_prefix(&script.id)
+                {
                     matched = Some((script.clone(), rest.trim_start().to_string()));
                     break;
                 }
@@ -2637,6 +2635,93 @@ mod tests {
             generation + 1,
             "force refresh should rerun"
         );
+    }
+
+    fn script_with(id: &str, trigger: Option<&str>) -> ScriptPlugin {
+        ScriptPlugin {
+            id: id.to_string(),
+            file_id: format!("{id}.sh"),
+            path: PathBuf::new(),
+            trigger: trigger.map(str::to_string),
+            interpreter: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn match_script_query_matches_trigger_exactly_or_with_space() {
+        let scripts = vec![script_with("todo", Some("todo"))];
+
+        let (script, payload) = App::match_script_query("todo", &scripts).unwrap();
+        assert_eq!(script.id, "todo");
+        assert_eq!(payload, "");
+
+        let (_, payload) = App::match_script_query("todo n example", &scripts).unwrap();
+        assert_eq!(payload, "n example");
+
+        let (_, payload) = App::match_script_query("todo ", &scripts).unwrap();
+        assert_eq!(payload, "");
+    }
+
+    #[test]
+    fn match_script_query_trigger_requires_word_boundary() {
+        let scripts = vec![script_with("todo", Some("todo"))];
+
+        assert!(App::match_script_query("todocli", &scripts).is_none());
+        assert!(App::match_script_query("todo-list", &scripts).is_none());
+        assert!(App::match_script_query("Todo", &scripts).is_none());
+    }
+
+    #[test]
+    fn match_script_query_symbolic_triggers_require_space_too() {
+        let scripts = vec![script_with("volume", Some("v!"))];
+
+        let (script, payload) = App::match_script_query("v! clip", &scripts).unwrap();
+        assert_eq!(script.id, "volume");
+        assert_eq!(payload, "clip");
+
+        assert!(App::match_script_query("v!clip", &scripts).is_none());
+    }
+
+    #[test]
+    fn match_script_query_exact_stem_beats_prefix_trigger() {
+        let scripts = vec![script_with("clock", None), script_with("calc", Some("c"))];
+
+        let (script, payload) = App::match_script_query("clock", &scripts).unwrap();
+        assert_eq!(script.id, "clock");
+        assert_eq!(payload, "");
+    }
+
+    #[test]
+    fn match_script_query_word_trigger_does_not_hijack_extended_queries() {
+        let scripts = vec![script_with("system", Some("system"))];
+
+        assert!(App::match_script_query("systemctl", &scripts).is_none());
+
+        let (_, payload) = App::match_script_query("system settings", &scripts).unwrap();
+        assert_eq!(payload, "settings");
+    }
+
+    #[test]
+    fn match_script_query_stem_matching_keeps_boundary_semantics() {
+        let scripts = vec![script_with("clock", None)];
+
+        let (script, payload) = App::match_script_query("clock", &scripts).unwrap();
+        assert_eq!(script.id, "clock");
+        assert_eq!(payload, "");
+
+        let (_, payload) = App::match_script_query("clock gtk", &scripts).unwrap();
+        assert_eq!(payload, "gtk");
+
+        assert!(App::match_script_query("clock-gtk", &scripts).is_none());
+        assert!(App::match_script_query("clock.sh", &scripts).is_some());
+    }
+
+    #[test]
+    fn match_script_query_skips_ambiguous_duplicate_stems() {
+        let scripts = vec![script_with("tool", None), script_with("tool", None)];
+
+        assert!(App::match_script_query("tool", &scripts).is_none());
     }
 
     #[test]
