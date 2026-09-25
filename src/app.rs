@@ -162,6 +162,7 @@ pub struct App {
     script_rx: mpsc::Receiver<ScriptRunResult>,
     script_generation: u64,
     script_results_ready: bool,
+    script_pending: bool,
     last_run_key: Option<(String, String)>,
     force_refresh: bool,
 }
@@ -239,6 +240,7 @@ impl App {
             script_rx,
             script_generation: 0,
             script_results_ready: false,
+            script_pending: false,
             last_run_key: None,
             force_refresh: false,
         };
@@ -840,6 +842,7 @@ impl App {
         self.script_meta = None;
         self.script_items.clear();
         self.script_results_ready = false;
+        self.script_pending = false;
         self.last_run_key = None;
         self.script_generation += 1;
 
@@ -1055,7 +1058,7 @@ impl App {
             && let Some(i) = self.list_state.selected()
             && let Some(item) = self.script_items.get(i).cloned()
         {
-            if item.meta.nonselectable {
+            if self.script_pending || item.meta.nonselectable {
                 return;
             }
             self.apply_script_actions(&item);
@@ -1596,6 +1599,10 @@ impl App {
             && self.script_results_ready
             && self.last_run_key.as_ref() == Some(&run_key)
         {
+            if self.script_pending {
+                self.script_generation += 1;
+                self.script_pending = false;
+            }
             debug!(
                 "Skipping script rerun for {} (payload unchanged)",
                 script.id
@@ -1603,13 +1610,8 @@ impl App {
             return true;
         }
 
-        self.script_title = None;
-        self.script_meta = None;
-        self.script_items.clear();
-        self.script_results_ready = false;
-        self.last_run_key = None;
-
         self.script_generation += 1;
+        self.script_pending = true;
         let generation = self.script_generation;
         info!(
             "Running script: {} (payload: {}, generation: {})",
@@ -1678,6 +1680,7 @@ impl App {
 
         self.last_run_key = Some((msg.script_id, msg.payload));
         self.script_results_ready = true;
+        self.script_pending = false;
         if self.script_items.is_empty() {
             self.list_state.select(None);
         } else {
@@ -2372,6 +2375,7 @@ mod tests {
             script_rx,
             script_generation: 0,
             script_results_ready: false,
+            script_pending: false,
             last_run_key: None,
             force_refresh: false,
         }
@@ -2634,6 +2638,148 @@ mod tests {
             app.script_generation,
             generation + 1,
             "force refresh should rerun"
+        );
+    }
+
+    fn script_item(title: &str) -> ScriptItem {
+        ScriptItem {
+            title: title.to_string(),
+            value: title.to_string(),
+            actions: vec![ScriptAction::None],
+            meta: ScriptRowMeta::default(),
+        }
+    }
+
+    fn wait_for_script_result(app: &mut App) {
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(20));
+            app.poll_script_results();
+            if app.script_results_ready && !app.script_pending {
+                return;
+            }
+        }
+        panic!("script result should arrive");
+    }
+
+    #[test]
+    fn script_frame_persists_until_new_results_arrive() {
+        let root = unique_temp_path();
+        let _cleanup = TempDirCleanup(root.clone());
+
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("echo.sh");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\necho 'qst! title Echo '\necho \"payload: $1\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut app = test_app();
+        app.scripts.push(ScriptPlugin {
+            id: "echo".to_string(),
+            file_id: "echo.sh".to_string(),
+            path: script_path,
+            trigger: None,
+            interpreter: None,
+            metadata: None,
+        });
+
+        assert!(app.try_run_script_query("echo", false));
+        wait_for_script_result(&mut app);
+        assert_eq!(app.script_items[0].title, "payload:");
+        assert_eq!(app.script_title.as_deref(), Some(" Echo "));
+
+        assert!(app.try_run_script_query("echo hello", false));
+        assert!(app.script_pending, "new run should be pending");
+        assert!(
+            app.script_results_ready,
+            "previous frame should still be ready"
+        );
+        assert_eq!(
+            app.script_items[0].title, "payload:",
+            "previous frame should persist while pending"
+        );
+        assert_eq!(
+            app.script_title.as_deref(),
+            Some(" Echo "),
+            "title should persist while pending"
+        );
+
+        wait_for_script_result(&mut app);
+        assert!(!app.script_pending);
+        assert_eq!(app.script_items[0].title, "payload: hello");
+        assert_eq!(
+            app.last_run_key,
+            Some(("echo".to_string(), "hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn skip_identical_query_cancels_pending_run() {
+        let mut app = test_app();
+        app.mode = AppMode::ScriptResults;
+        app.script_results_ready = true;
+        app.last_run_key = Some(("echo".to_string(), String::new()));
+        app.script_title = Some(" Echo ".to_string());
+        app.script_items = vec![script_item("old")];
+        app.scripts.push(script_with("echo", None));
+
+        assert!(app.try_run_script_query("echo other", false));
+        assert!(app.script_pending);
+        let pending_generation = app.script_generation;
+
+        assert!(app.try_run_script_query("echo", false));
+        assert!(
+            !app.script_pending,
+            "skipping back to the displayed query should cancel the pending run"
+        );
+        assert!(
+            app.script_generation > pending_generation,
+            "cancelling should invalidate the in-flight result"
+        );
+        assert_eq!(app.script_title.as_deref(), Some(" Echo "));
+        assert_eq!(app.script_items[0].title, "old");
+
+        let _ = app.script_tx.send(ScriptRunResult {
+            generation: pending_generation,
+            script_id: "echo".to_string(),
+            payload: "other".to_string(),
+            result: Ok((
+                Some(" Other ".to_string()),
+                None,
+                None,
+                vec![script_item("other")],
+            )),
+        });
+        app.poll_script_results();
+
+        assert_eq!(
+            app.script_title.as_deref(),
+            Some(" Echo "),
+            "cancelled run should not replace the frame"
+        );
+        assert_eq!(app.script_items[0].title, "old");
+    }
+
+    #[test]
+    fn launch_selected_is_ignored_while_script_run_is_pending() {
+        let mut app = test_app();
+        app.mode = AppMode::ScriptResults;
+        app.script_pending = true;
+        app.list_state.select(Some(0));
+        app.script_items = vec![ScriptItem {
+            title: "refresh".to_string(),
+            value: String::new(),
+            actions: vec![ScriptAction::RefreshResults],
+            meta: ScriptRowMeta::default(),
+        }];
+
+        app.launch_selected();
+
+        assert!(
+            !app.force_refresh,
+            "activation should be ignored while a run is pending"
         );
     }
 
