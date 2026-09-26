@@ -162,7 +162,7 @@ pub struct App {
     script_rx: mpsc::Receiver<ScriptRunResult>,
     script_generation: u64,
     script_results_ready: bool,
-    script_pending: bool,
+    pub script_pending: bool,
     last_run_key: Option<(String, String)>,
     force_refresh: bool,
 }

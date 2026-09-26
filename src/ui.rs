@@ -389,24 +389,26 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .collect()
     };
 
+    let title: String = if app.mode == AppMode::AppSelection {
+        config
+            .list
+            .apps_title
+            .as_deref()
+            .unwrap_or(" Applications ")
+            .to_string()
+    } else if app.mode == AppMode::ScriptResults {
+        script_list_title(app.script_title.as_deref(), app.script_pending)
+    } else {
+        config
+            .list
+            .files_title
+            .as_deref()
+            .unwrap_or(" Directories ")
+            .to_string()
+    };
     let mut list = List::new(items);
     if config.list.section.is_visible() {
-        let title = if app.mode == AppMode::AppSelection {
-            config
-                .list
-                .apps_title
-                .as_deref()
-                .unwrap_or(" Applications ")
-        } else if app.mode == AppMode::ScriptResults {
-            app.script_title.as_deref().unwrap_or(" Scripts ")
-        } else {
-            config
-                .list
-                .files_title
-                .as_deref()
-                .unwrap_or(" Directories ")
-        };
-        list = list.block(config.list.section.block_with_title(general, title));
+        list = list.block(config.list.section.block_with_title(general, &title));
     }
 
     f.render_stateful_widget(list, scroll_area, &mut app.list_state);
@@ -430,6 +432,15 @@ struct ListItemParams<'a> {
     row_style: Style,
     entry_style: Style,
     fill_row: bool,
+}
+
+fn script_list_title(title: Option<&str>, pending: bool) -> String {
+    let title = title.unwrap_or(" Scripts ");
+    if pending {
+        format!("{title}…")
+    } else {
+        title.to_string()
+    }
 }
 
 fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'static> {
@@ -756,5 +767,13 @@ mod tests {
             aligned_text("abcd", 10, TextAlignment::Center, 2),
             "  abcd  "
         );
+    }
+
+    #[test]
+    fn script_list_title_marks_pending_with_ellipsis() {
+        assert_eq!(script_list_title(Some(" Echo "), false), " Echo ");
+        assert_eq!(script_list_title(Some(" Echo "), true), " Echo …");
+        assert_eq!(script_list_title(None, false), " Scripts ");
+        assert_eq!(script_list_title(None, true), " Scripts …");
     }
 }
