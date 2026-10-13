@@ -370,7 +370,7 @@ impl SectionConfig {
         self.borders.unwrap_or(general.show_borders)
     }
 
-    pub fn block_with_title<'a>(&self, general: &GeneralConfig, title: &'a str) -> Block<'a> {
+    pub fn block_with_title<'a>(&self, general: &GeneralConfig, title: Line<'a>) -> Block<'a> {
         let mut block = Block::default().title(title);
 
         block = block.title_alignment(self.title_alignment.unwrap_or(TextAlignment::Left).into());

@@ -125,6 +125,20 @@ Supported row metadata keys:
   - Centers the row within the available text area.
 - `urgent=<bool>`
   - Moves the row to the top of the list and renders it in bold red without an inline prefix.
+- `fg=<color>`
+  - Sets the label foreground color. Accepts `#rrggbb`, `#rrggbbaa`, or a color name such as `red` or `light-blue`.
+- `bg=<color>`
+  - Sets the label background color. Accepts the same values as `fg`.
+
+The `fg` and `bg` colors apply to the visible label only, so alignment padding and
+the selection gutter keep their normal styling, and the label keeps its color while
+selected. The `qst! title` and `qst! message` directives accept the same tokens.
+
+Example:
+
+```bash
+echo "qst! item  ████████|#ff8800 @meta:fg=#ff8800 @meta:center=true @meta:nonselectable=true"
+```
 
 ## Supported actions
 
