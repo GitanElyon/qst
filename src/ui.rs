@@ -211,7 +211,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     {
         let message_style = Style::default()
             .fg(Color::Yellow)
-            .patch(script_meta_color_style(&app.status_message_meta));
+            .patch(script_meta_label_style(&app.status_message_meta));
         let status = Paragraph::new(Line::from(Span::styled(message.clone(), message_style)));
         f.render_widget(status, chunk);
     }
@@ -335,7 +335,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     );
                     Some((label_start, label.chars().count()))
                 };
-                let label_style = script_meta_color_style(&item.meta);
+                let label_style = script_meta_label_style(&item.meta);
 
                 let mut row_style = normal_entry_style;
                 if item.meta.active {
@@ -433,7 +433,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .to_string()
     };
     let title_style = if app.mode == AppMode::ScriptResults {
-        script_meta_color_style(&app.script_title_meta)
+        script_meta_label_style(&app.script_title_meta)
     } else {
         Style::default()
     };
@@ -624,7 +624,7 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
     }
 }
 
-fn script_meta_color_style(meta: &ScriptRowMeta) -> Style {
+fn script_meta_label_style(meta: &ScriptRowMeta) -> Style {
     let mut style = Style::default();
     if let Some(color) = meta.fg.as_deref().and_then(crate::config::parse_color) {
         style = style.fg(color);
@@ -632,6 +632,30 @@ fn script_meta_color_style(meta: &ScriptRowMeta) -> Style {
     if let Some(color) = meta.bg.as_deref().and_then(crate::config::parse_color) {
         style = style.bg(color);
     }
+
+    let mut modifiers = Modifier::empty();
+    if meta.bold {
+        modifiers |= Modifier::BOLD;
+    }
+    if meta.dim {
+        modifiers |= Modifier::DIM;
+    }
+    if meta.italic {
+        modifiers |= Modifier::ITALIC;
+    }
+    if meta.underline {
+        modifiers |= Modifier::UNDERLINED;
+    }
+    if meta.strikethrough {
+        modifiers |= Modifier::CROSSED_OUT;
+    }
+    if meta.reversed {
+        modifiers |= Modifier::REVERSED;
+    }
+    if !modifiers.is_empty() {
+        style = style.add_modifier(modifiers);
+    }
+
     style
 }
 
@@ -942,24 +966,55 @@ mod tests {
     }
 
     #[test]
-    fn script_meta_color_style_parses_fg_and_bg() {
+    fn script_meta_label_style_parses_fg_and_bg() {
         let meta = ScriptRowMeta {
             fg: Some("#ff8800".to_string()),
             bg: Some("blue".to_string()),
             ..ScriptRowMeta::default()
         };
 
-        let style = script_meta_color_style(&meta);
+        let style = script_meta_label_style(&meta);
         assert_eq!(style.fg, Some(Color::Rgb(255, 136, 0)));
         assert_eq!(style.bg, Some(Color::Blue));
     }
 
     #[test]
-    fn script_meta_color_style_ignores_invalid_values() {
+    fn script_meta_label_style_ignores_invalid_values() {
         let meta = ScriptRowMeta {
             fg: Some("not-a-color".to_string()),
             ..ScriptRowMeta::default()
         };
-        assert_eq!(script_meta_color_style(&meta), Style::default());
+        assert_eq!(script_meta_label_style(&meta), Style::default());
+    }
+
+    #[test]
+    fn script_meta_label_style_maps_modifiers() {
+        let meta = ScriptRowMeta {
+            bold: true,
+            dim: true,
+            italic: true,
+            underline: true,
+            strikethrough: true,
+            reversed: true,
+            ..ScriptRowMeta::default()
+        };
+
+        let style = script_meta_label_style(&meta);
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert!(style.add_modifier.contains(Modifier::DIM));
+        assert!(style.add_modifier.contains(Modifier::ITALIC));
+        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+        assert!(style.add_modifier.contains(Modifier::CROSSED_OUT));
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn script_meta_label_style_without_modifiers_stays_default() {
+        let meta = ScriptRowMeta {
+            bold: false,
+            italic: false,
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_label_style(&meta), Style::default());
     }
 }

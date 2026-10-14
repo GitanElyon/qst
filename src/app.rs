@@ -61,6 +61,12 @@ pub struct ScriptRowMeta {
     pub fuzzy: bool,
     pub fg: Option<String>,
     pub bg: Option<String>,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub reversed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -557,6 +563,12 @@ impl App {
                 "bg" => {
                     meta.bg = (!value.is_empty()).then(|| value.to_string());
                 }
+                "bold" => meta.bold = Self::parse_meta_bool(value),
+                "dim" => meta.dim = Self::parse_meta_bool(value),
+                "italic" | "italics" => meta.italic = Self::parse_meta_bool(value),
+                "underline" | "underlined" => meta.underline = Self::parse_meta_bool(value),
+                "strikethrough" | "strike" => meta.strikethrough = Self::parse_meta_bool(value),
+                "reversed" | "reverse" => meta.reversed = Self::parse_meta_bool(value),
                 _ => {}
             }
         }
@@ -583,6 +595,12 @@ impl App {
         if source.bg.is_some() {
             target.bg = source.bg;
         }
+        target.bold |= source.bold;
+        target.dim |= source.dim;
+        target.italic |= source.italic;
+        target.underline |= source.underline;
+        target.strikethrough |= source.strikethrough;
+        target.reversed |= source.reversed;
     }
 
     fn parse_script_row_text(text: &str) -> (String, ScriptRowMeta) {
@@ -2498,6 +2516,44 @@ mod tests {
         assert_eq!(meta.fg.as_deref(), Some("#3498db"));
         assert!(meta.center);
         assert!(meta.nonselectable);
+    }
+
+    #[test]
+    fn parse_script_row_text_reads_modifier_meta() {
+        let (visible, meta) = App::parse_script_row_text(
+            "Styled @meta:bold @meta:italics=true @meta:underline=true @meta:strike @meta:reverse=true @meta:dim=false",
+        );
+
+        assert_eq!(visible, "Styled");
+        assert!(meta.bold);
+        assert!(meta.italic);
+        assert!(meta.underline);
+        assert!(meta.strikethrough);
+        assert!(meta.reversed);
+        assert!(!meta.dim);
+    }
+
+    #[test]
+    fn apply_script_row_meta_merges_modifiers() {
+        let mut target = ScriptRowMeta::default();
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                bold: true,
+                ..ScriptRowMeta::default()
+            },
+        );
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                italic: true,
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert!(target.bold);
+        assert!(target.italic);
+        assert!(!target.underline);
     }
 
     #[test]

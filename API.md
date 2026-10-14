@@ -105,6 +105,7 @@ Rules:
 
 - Metadata tokens are appended at the end of the row or directive payload.
 - Multiple metadata tokens may be chained in the same row.
+- A value or action segment may consist of metadata tokens only, for example `| @meta:nonselectable=true`.
 - If a literal `/@meta` is used at the start of a row, qst treats it as normal text.
 
 Supported row metadata keys:
@@ -129,15 +130,31 @@ Supported row metadata keys:
   - Sets the label foreground color. Accepts `#rrggbb`, `#rrggbbaa`, or a color name such as `red` or `light-blue`.
 - `bg=<color>`
   - Sets the label background color. Accepts the same values as `fg`.
+- `bold=<bool>`
+  - Renders the label in bold.
+- `dim=<bool>`
+  - Renders the label dimmed.
+- `italic=<bool>`
+  - Renders the label in italics.
+- `underline=<bool>`
+  - Underlines the label.
+- `strikethrough=<bool>`
+  - Strikes through the label.
+- `reversed=<bool>`
+  - Swaps the label foreground and background colors.
 
-The `fg` and `bg` colors apply to the visible label only, so alignment padding and
-the selection gutter keep their normal styling, and the label keeps its color while
-selected. The `qst! title` and `qst! message` directives accept the same tokens.
+The `fg`, `bg`, and modifier tokens apply to the visible label only, so alignment
+padding and the selection gutter keep their normal styling, and the label keeps its
+color while selected. The `qst! title` and `qst! message` directives accept the same
+tokens.
 
 Example:
 
 ```bash
-echo "qst! item  ████████|#ff8800 @meta:fg=#ff8800 @meta:center=true @meta:nonselectable=true"
+# Color a status list by severity: green is fine, yellow warns, red bold demands attention.
+echo "qst! item  api      * up|api|CopyToClipboard @meta:fg=green"
+echo "qst! item  worker   * degraded|worker|CopyToClipboard @meta:fg=yellow @meta:bold=true"
+echo "qst! item  cache    * down|cache|CopyToClipboard @meta:fg=red @meta:bold=true @meta:reversed=true"
 ```
 
 ## Supported actions
