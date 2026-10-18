@@ -61,6 +61,7 @@ pub struct ScriptRowMeta {
     pub fuzzy: bool,
     pub fg: Option<String>,
     pub bg: Option<String>,
+    pub fill: Option<String>,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
@@ -563,6 +564,9 @@ impl App {
                 "bg" => {
                     meta.bg = (!value.is_empty()).then(|| value.to_string());
                 }
+                "fill" => {
+                    meta.fill = (!value.is_empty()).then(|| value.to_string());
+                }
                 "bold" => meta.bold = Self::parse_meta_bool(value),
                 "dim" => meta.dim = Self::parse_meta_bool(value),
                 "italic" | "italics" => meta.italic = Self::parse_meta_bool(value),
@@ -594,6 +598,9 @@ impl App {
         }
         if source.bg.is_some() {
             target.bg = source.bg;
+        }
+        if source.fill.is_some() {
+            target.fill = source.fill;
         }
         target.bold |= source.bold;
         target.dim |= source.dim;
@@ -2504,6 +2511,36 @@ mod tests {
         assert_eq!(visible, "Swatch|row");
         assert_eq!(meta.fg.as_deref(), Some("#ff8800"));
         assert_eq!(meta.bg.as_deref(), Some("#102030"));
+    }
+
+    #[test]
+    fn parse_script_row_text_reads_fill_meta() {
+        let (visible, meta) = App::parse_script_row_text("@meta:fill=#102030 @meta:center=true");
+
+        assert_eq!(visible, "");
+        assert_eq!(meta.fill.as_deref(), Some("#102030"));
+        assert!(meta.center);
+    }
+
+    #[test]
+    fn apply_script_row_meta_overrides_fill_when_present() {
+        let mut target = ScriptRowMeta::default();
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                fill: Some("#111111".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                fill: Some("#222222".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert_eq!(target.fill.as_deref(), Some("#222222"));
     }
 
     #[test]

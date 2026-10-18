@@ -130,6 +130,8 @@ Supported row metadata keys:
   - Sets the label foreground color. Accepts `#rrggbb`, `#rrggbbaa`, or a color name such as `red` or `light-blue`.
 - `bg=<color>`
   - Sets the label background color. Accepts the same values as `fg`.
+- `fill=<color>`
+  - Sets the background across the full row width. Accepts the same values as `fg`. A label `bg` overrides it on the label.
 - `bold=<bool>`
   - Renders the label in bold.
 - `dim=<bool>`
@@ -143,11 +145,6 @@ Supported row metadata keys:
 - `reversed=<bool>`
   - Swaps the label foreground and background colors.
 
-The `fg`, `bg`, and modifier tokens apply to the visible label only, so alignment
-padding and the selection gutter keep their normal styling, and the label keeps its
-color while selected. The `qst! title` and `qst! message` directives accept the same
-tokens.
-
 Example:
 
 ```bash
@@ -155,6 +152,8 @@ Example:
 echo "qst! item  api      * up|api|CopyToClipboard @meta:fg=green"
 echo "qst! item  worker   * degraded|worker|CopyToClipboard @meta:fg=yellow @meta:bold=true"
 echo "qst! item  cache    * down|cache|CopyToClipboard @meta:fg=red @meta:bold=true @meta:reversed=true"
+# Fill a row's background across the whole width.
+echo "qst! item  maintenance tonight|maintenance|None @meta:fill=#332200 @meta:fg=#ffcc00 @meta:nonselectable=true"
 ```
 
 ## Supported actions

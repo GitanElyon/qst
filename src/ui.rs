@@ -293,6 +293,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     fill_row: false,
                     label_range: None,
                     label_style: Style::default(),
+                    fill_bg: None,
                 };
                 build_list_item(&display_text, &item)
             })
@@ -336,6 +337,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     Some((label_start, label.chars().count()))
                 };
                 let label_style = script_meta_label_style(&item.meta);
+                let fill_color = script_meta_fill_color(&item.meta);
 
                 let mut row_style = normal_entry_style;
                 if item.meta.active {
@@ -345,6 +347,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     row_style = row_style
                         .patch(config.meta.urgent.style())
                         .add_modifier(Modifier::BOLD);
+                }
+                if let Some(color) = fill_color {
+                    row_style = row_style.bg(color);
                 }
 
                 let item = ListItemParams {
@@ -363,9 +368,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     full_row_width,
                     row_style,
                     entry_style,
-                    fill_row: item.meta.active,
+                    fill_row: item.meta.active || fill_color.is_some(),
                     label_range,
                     label_style,
+                    fill_bg: fill_color,
                 };
                 build_list_item(&display_text, &item)
             })
@@ -409,6 +415,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     fill_row: false,
                     label_range: None,
                     label_style: Style::default(),
+                    fill_bg: None,
                 };
                 build_list_item(&display_text, &item)
             })
@@ -466,6 +473,7 @@ struct ListItemParams<'a> {
     fill_row: bool,
     label_range: Option<(usize, usize)>,
     label_style: Style,
+    fill_bg: Option<Color>,
 }
 
 fn script_list_title(title: Option<&str>, pending: bool) -> String {
@@ -491,6 +499,7 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
     let entry_style = item.entry_style;
     let label_range = item.label_range;
     let label_style = item.label_style;
+    let fill_bg = item.fill_bg;
     let config = item.config;
     if !is_selected || !config.entry_selected.is_visible() {
         let rendered_text = if fill_row {
@@ -535,6 +544,9 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
                             )
                         };
                         style = style.bg(bg);
+                    }
+                    if let Some(color) = fill_bg {
+                        style = style.bg(color);
                     }
                     if let Some((start, len)) = label_range
                         && idx >= start
@@ -657,6 +669,10 @@ fn script_meta_label_style(meta: &ScriptRowMeta) -> Style {
     }
 
     style
+}
+
+fn script_meta_fill_color(meta: &ScriptRowMeta) -> Option<Color> {
+    meta.fill.as_deref().and_then(crate::config::parse_color)
 }
 
 fn label_spans(
@@ -1013,6 +1029,36 @@ mod tests {
         let meta = ScriptRowMeta {
             bold: false,
             italic: false,
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_label_style(&meta), Style::default());
+    }
+
+    #[test]
+    fn script_meta_fill_color_parses_hex_and_names() {
+        let hex = ScriptRowMeta {
+            fill: Some("#102030".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_fill_color(&hex), Some(Color::Rgb(16, 32, 48)));
+
+        let named = ScriptRowMeta {
+            fill: Some("red".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_fill_color(&named), Some(Color::Red));
+
+        let invalid = ScriptRowMeta {
+            fill: Some("not-a-color".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_fill_color(&invalid), None);
+    }
+
+    #[test]
+    fn script_meta_fill_does_not_style_the_label() {
+        let meta = ScriptRowMeta {
+            fill: Some("#102030".to_string()),
             ..ScriptRowMeta::default()
         };
         assert_eq!(script_meta_label_style(&meta), Style::default());

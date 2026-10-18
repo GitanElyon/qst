@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Row metadata `@meta:fg=<color>` and `@meta:bg=<color>` for coloring script row labels. Colors apply to the label only, so centered rows stay centered and colored labels keep their color while selected.
+- Row metadata `@meta:fill=<color>` for setting a background across the full row width; a label `bg` overrides it on the label.
 - Row metadata text modifiers: `@meta:bold`, `@meta:dim`, `@meta:italic`, `@meta:underline`, `@meta:strikethrough`, and `@meta:reversed`.
 - `qst! title` and `qst! message` accept the same color and modifier tokens, styling the script title and status message.
 
