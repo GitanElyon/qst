@@ -125,7 +125,7 @@ Supported row metadata keys:
 - `center=<bool>`
   - Centers the row within the available text area.
 - `urgent=<bool>`
-  - Moves the row to the top of the list and renders it in bold red without an inline prefix.
+  - Moves the row to the top of the list.
 - `fg=<color>`
   - Sets the label foreground color. Accepts `#rrggbb`, `#rrggbbaa`, or a color name such as `red` or `light-blue`.
 - `bg=<color>`

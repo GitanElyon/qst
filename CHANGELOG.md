@@ -13,6 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Row metadata text modifiers: `@meta:bold`, `@meta:dim`, `@meta:italic`, `@meta:underline`, `@meta:strikethrough`, and `@meta:reversed`.
 - `qst! title` and `qst! message` accept the same color and modifier tokens, styling the script title and status message.
 
+### Changed
+
+- `@meta:urgent` now only moves the row to the top of the list; it no longer applies bold or red styling. Scripts that want emphasis can use `@meta:fg`, `@meta:bold`, and the other styling tokens.
+
+### Deprecated
+
+- The `[meta.urgent]` config section is unused and will be removed in a future release.
+
 ### Fixed
 
 - Row metadata that begins a value or action segment (for example `| @meta:nonselectable=true`) is now parsed as metadata instead of leaking into the visible value.

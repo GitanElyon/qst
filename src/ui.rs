@@ -343,11 +343,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 if item.meta.active {
                     row_style = row_style.patch(config.meta.active.style());
                 }
-                if item.meta.urgent {
-                    row_style = row_style
-                        .patch(config.meta.urgent.style())
-                        .add_modifier(Modifier::BOLD);
-                }
                 if let Some(color) = fill_color {
                     row_style = row_style.bg(color);
                 }
