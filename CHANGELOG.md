@@ -4,6 +4,28 @@ All notable changes to Qst are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-10-20
+
+### Added
+
+- Row metadata `@meta:fg=<color>` and `@meta:bg=<color>` for coloring script row labels. Colors apply to the label only, so centered rows stay centered and colored labels keep their color while selected.
+- Row metadata `@meta:fill=<color>` for setting a background across the full row width; a label `bg` overrides it on the label.
+- Row metadata text modifiers: `@meta:bold`, `@meta:dim`, `@meta:italic`, `@meta:underline`, `@meta:strikethrough`, and `@meta:reversed`.
+- `qst! title` and `qst! message` accept the same color and modifier tokens, styling the script title and status message.
+
+### Changed
+
+- `@meta:urgent` now only moves the row to the top of the list; it no longer applies bold or red styling. Scripts that want emphasis can use `@meta:fg`, `@meta:bold`, and the other styling tokens.
+
+### Deprecated
+
+- The `[meta.urgent]` config section is unused and will be removed in a future release.
+- `@meta:active` token is deprecated in favor of `@meta:fill=<color>` for active-state styling.
+
+### Fixed
+
+- Row metadata that begins a value or action segment (for example `| @meta:nonselectable=true`) is now parsed as metadata instead of leaking into the visible value.
+
 ## [0.13.1] - 2026-09-26
 
 ### Added

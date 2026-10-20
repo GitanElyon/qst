@@ -105,6 +105,7 @@ Rules:
 
 - Metadata tokens are appended at the end of the row or directive payload.
 - Multiple metadata tokens may be chained in the same row.
+- A value or action segment may consist of metadata tokens only, for example `| @meta:nonselectable=true`.
 - If a literal `/@meta` is used at the start of a row, qst treats it as normal text.
 
 Supported row metadata keys:
@@ -120,11 +121,40 @@ Supported row metadata keys:
 - `permanent=<bool>`
   - Keeps the row available for UI flows that preserve permanent rows.
 - `active=<bool>`
-  - Renders the row with the active-state styling.
+  - **DEPRECATED**--use `@meta:fill=<color>` instead. Renders the row with the active-state styling.
 - `center=<bool>`
   - Centers the row within the available text area.
 - `urgent=<bool>`
-  - Moves the row to the top of the list and renders it in bold red without an inline prefix.
+  - Moves the row to the top of the list.
+- `fg=<color>`
+  - Sets the label foreground color. Accepts `#rrggbb`, `#rrggbbaa`, or a color name such as `red` or `light-blue`.
+- `bg=<color>`
+  - Sets the label background color. Accepts the same values as `fg`.
+- `fill=<color>`
+  - Sets the background across the full row width. Accepts the same values as `fg`. A label `bg` overrides it on the label.
+- `bold=<bool>`
+  - Renders the label in bold.
+- `dim=<bool>`
+  - Renders the label dimmed.
+- `italic=<bool>`
+  - Renders the label in italics.
+- `underline=<bool>`
+  - Underlines the label.
+- `strikethrough=<bool>`
+  - Strikes through the label.
+- `reversed=<bool>`
+  - Swaps the label foreground and background colors.
+
+Example:
+
+```bash
+# Color a status list by severity: green is fine, yellow warns, red bold demands attention.
+echo "qst! item  api      * up|api|CopyToClipboard @meta:fg=green"
+echo "qst! item  worker   * degraded|worker|CopyToClipboard @meta:fg=yellow @meta:bold=true"
+echo "qst! item  cache    * down|cache|CopyToClipboard @meta:fg=red @meta:bold=true @meta:reversed=true"
+# Fill a row's background across the whole width.
+echo "qst! item  maintenance tonight|maintenance|None @meta:fill=#332200 @meta:fg=#ffcc00 @meta:nonselectable=true"
+```
 
 ## Supported actions
 

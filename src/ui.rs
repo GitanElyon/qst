@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, AppMode},
+    app::{App, AppMode, ScriptRowMeta},
     config::TextAlignment,
 };
 use log::debug;
@@ -209,7 +209,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(chunk) = status_chunk
         && let Some(message) = &app.status_message
     {
-        let status = Paragraph::new(message.as_str()).style(Style::default().fg(Color::Yellow));
+        let message_style = Style::default()
+            .fg(Color::Yellow)
+            .patch(script_meta_label_style(&app.status_message_meta));
+        let status = Paragraph::new(Line::from(Span::styled(message.clone(), message_style)));
         f.render_widget(status, chunk);
     }
 
@@ -288,6 +291,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     row_style: normal_entry_style,
                     entry_style,
                     fill_row: false,
+                    label_range: None,
+                    label_style: Style::default(),
+                    fill_bg: None,
                 };
                 build_list_item(&display_text, &item)
             })
@@ -306,23 +312,39 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 };
                 let mut display_text =
                     aligned_text(&label, text_area_width, alignment, selected_symbol_width);
-                if entry_selected_visible {
+                let label_range = if entry_selected_visible {
                     let prefix = if Some(idx) == selected_idx {
                         highlight_symbol.to_string()
                     } else {
                         " ".repeat(highlight_symbol.chars().count())
                     };
+                    let label_start = selected_symbol_width as usize
+                        + alignment_left_padding(
+                            label.chars().count(),
+                            text_area_width,
+                            alignment,
+                            selected_symbol_width,
+                        );
                     display_text = format!("{}{}", prefix, display_text);
-                }
+                    Some((label_start, label.chars().count()))
+                } else {
+                    let label_start = alignment_left_padding(
+                        label.chars().count(),
+                        text_area_width,
+                        alignment,
+                        selected_symbol_width,
+                    );
+                    Some((label_start, label.chars().count()))
+                };
+                let label_style = script_meta_label_style(&item.meta);
+                let fill_color = script_meta_fill_color(&item.meta);
 
                 let mut row_style = normal_entry_style;
                 if item.meta.active {
                     row_style = row_style.patch(config.meta.active.style());
                 }
-                if item.meta.urgent {
-                    row_style = row_style
-                        .patch(config.meta.urgent.style())
-                        .add_modifier(Modifier::BOLD);
+                if let Some(color) = fill_color {
+                    row_style = row_style.bg(color);
                 }
 
                 let item = ListItemParams {
@@ -341,7 +363,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     full_row_width,
                     row_style,
                     entry_style,
-                    fill_row: item.meta.active,
+                    fill_row: item.meta.active || fill_color.is_some(),
+                    label_range,
+                    label_style,
+                    fill_bg: fill_color,
                 };
                 build_list_item(&display_text, &item)
             })
@@ -383,6 +408,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     row_style: normal_entry_style,
                     entry_style,
                     fill_row: false,
+                    label_range: None,
+                    label_style: Style::default(),
+                    fill_bg: None,
                 };
                 build_list_item(&display_text, &item)
             })
@@ -406,9 +434,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .unwrap_or(" Directories ")
             .to_string()
     };
+    let title_style = if app.mode == AppMode::ScriptResults {
+        script_meta_label_style(&app.script_title_meta)
+    } else {
+        Style::default()
+    };
+    let title_line = Line::from(Span::styled(title, title_style));
     let mut list = List::new(items);
     if config.list.section.is_visible() {
-        list = list.block(config.list.section.block_with_title(general, &title));
+        list = list.block(config.list.section.block_with_title(general, title_line));
     }
 
     f.render_stateful_widget(list, scroll_area, &mut app.list_state);
@@ -432,6 +466,9 @@ struct ListItemParams<'a> {
     row_style: Style,
     entry_style: Style,
     fill_row: bool,
+    label_range: Option<(usize, usize)>,
+    label_style: Style,
+    fill_bg: Option<Color>,
 }
 
 fn script_list_title(title: Option<&str>, pending: bool) -> String {
@@ -455,6 +492,9 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
     let full_row_width = item.full_row_width;
     let row_style = item.row_style;
     let entry_style = item.entry_style;
+    let label_range = item.label_range;
+    let label_style = item.label_style;
+    let fill_bg = item.fill_bg;
     let config = item.config;
     if !is_selected || !config.entry_selected.is_visible() {
         let rendered_text = if fill_row {
@@ -500,6 +540,15 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
                         };
                         style = style.bg(bg);
                     }
+                    if let Some(color) = fill_bg {
+                        style = style.bg(color);
+                    }
+                    if let Some((start, len)) = label_range
+                        && idx >= start
+                        && idx < start + len
+                    {
+                        style = style.patch(label_style);
+                    }
                     Span::styled(ch.to_string(), style)
                 })
                 .collect();
@@ -507,8 +556,13 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
             return ListItem::new(Text::from(Line::from(spans))).style(entry_style);
         }
 
-        return ListItem::new(Text::from(Span::styled(rendered_text, row_style)))
-            .style(entry_style);
+        return ListItem::new(Text::from(Line::from(label_spans(
+            &rendered_text,
+            label_range,
+            row_style,
+            label_style,
+        ))))
+        .style(entry_style);
     }
 
     let selected_text = if config.entry_selected.full_width_highlight.unwrap_or(true) || fill_row {
@@ -555,14 +609,102 @@ fn build_list_item(display_text: &str, item: &ListItemParams<'_>) -> ListItem<'s
                     };
                     style = style.bg(bg);
                 }
+                if let Some((start, len)) = label_range
+                    && idx >= start
+                    && idx < start + len
+                {
+                    style = style.patch(label_style);
+                }
                 Span::styled(ch.to_string(), style)
             })
             .collect();
 
         ListItem::new(Text::from(Line::from(spans))).style(entry_style)
     } else {
-        ListItem::new(Text::from(Span::styled(selected_text, selected_style))).style(entry_style)
+        ListItem::new(Text::from(Line::from(label_spans(
+            &selected_text,
+            label_range,
+            selected_style,
+            label_style,
+        ))))
+        .style(entry_style)
     }
+}
+
+fn script_meta_label_style(meta: &ScriptRowMeta) -> Style {
+    let mut style = Style::default();
+    if let Some(color) = meta.fg.as_deref().and_then(crate::config::parse_color) {
+        style = style.fg(color);
+    }
+    if let Some(color) = meta.bg.as_deref().and_then(crate::config::parse_color) {
+        style = style.bg(color);
+    }
+
+    let mut modifiers = Modifier::empty();
+    if meta.bold {
+        modifiers |= Modifier::BOLD;
+    }
+    if meta.dim {
+        modifiers |= Modifier::DIM;
+    }
+    if meta.italic {
+        modifiers |= Modifier::ITALIC;
+    }
+    if meta.underline {
+        modifiers |= Modifier::UNDERLINED;
+    }
+    if meta.strikethrough {
+        modifiers |= Modifier::CROSSED_OUT;
+    }
+    if meta.reversed {
+        modifiers |= Modifier::REVERSED;
+    }
+    if !modifiers.is_empty() {
+        style = style.add_modifier(modifiers);
+    }
+
+    style
+}
+
+fn script_meta_fill_color(meta: &ScriptRowMeta) -> Option<Color> {
+    meta.fill.as_deref().and_then(crate::config::parse_color)
+}
+
+fn label_spans(
+    text: &str,
+    range: Option<(usize, usize)>,
+    base_style: Style,
+    label_style: Style,
+) -> Vec<Span<'static>> {
+    let Some((start, len)) = range else {
+        return vec![Span::styled(text.to_string(), base_style)];
+    };
+
+    let chars: Vec<char> = text.chars().collect();
+    let start = start.min(chars.len());
+    let end = start.saturating_add(len).min(chars.len());
+    if len == 0 || label_style == Style::default() || start >= end {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
+    let mut spans = Vec::new();
+    if start > 0 {
+        spans.push(Span::styled(
+            chars[..start].iter().collect::<String>(),
+            base_style,
+        ));
+    }
+    spans.push(Span::styled(
+        chars[start..end].iter().collect::<String>(),
+        base_style.patch(label_style),
+    ));
+    if end < chars.len() {
+        spans.push(Span::styled(
+            chars[end..].iter().collect::<String>(),
+            base_style,
+        ));
+    }
+    spans
 }
 
 fn apply_section_border_colors(
@@ -681,23 +823,47 @@ fn pad_to_width(text: &str, width: usize) -> String {
     }
 }
 
+fn alignment_left_padding(
+    label_width: usize,
+    width: u16,
+    alignment: TextAlignment,
+    selected_symbol_width: u16,
+) -> usize {
+    let width = if matches!(alignment, TextAlignment::Center) {
+        width.saturating_sub(selected_symbol_width)
+    } else {
+        width
+    } as usize;
+
+    if label_width >= width {
+        return 0;
+    }
+
+    let padding = width - label_width;
+    match alignment {
+        TextAlignment::Left => 0,
+        TextAlignment::Right => padding,
+        TextAlignment::Center => padding / 2,
+    }
+}
+
 fn aligned_text(
     text: &str,
     width: u16,
     alignment: TextAlignment,
     selected_symbol_width: u16,
 ) -> String {
-    let width = if matches!(alignment, TextAlignment::Center) {
+    let effective_width = if matches!(alignment, TextAlignment::Center) {
         width.saturating_sub(selected_symbol_width)
     } else {
         width
     };
 
-    if width == 0 {
+    if effective_width == 0 {
         return text.to_string();
     }
 
-    let width = width as usize;
+    let width = effective_width as usize;
     let current = text.chars().count();
     if current >= width {
         return text.to_string();
@@ -708,7 +874,7 @@ fn aligned_text(
         TextAlignment::Left => text.to_string(),
         TextAlignment::Right => format!("{:>width$}", text, width = width),
         TextAlignment::Center => {
-            let left = padding / 2;
+            let left = alignment_left_padding(current, width as u16, alignment, 0);
             let right = padding - left;
             format!(
                 "{left_padding}{text}{right_padding}",
@@ -775,5 +941,121 @@ mod tests {
         assert_eq!(script_list_title(Some(" Echo "), true), " Echo …");
         assert_eq!(script_list_title(None, false), " Scripts ");
         assert_eq!(script_list_title(None, true), " Scripts …");
+    }
+
+    #[test]
+    fn alignment_left_padding_matches_aligned_text() {
+        assert_eq!(alignment_left_padding(4, 10, TextAlignment::Center, 0), 3);
+        assert_eq!(alignment_left_padding(4, 10, TextAlignment::Center, 2), 2);
+        assert_eq!(alignment_left_padding(4, 10, TextAlignment::Left, 0), 0);
+        assert_eq!(alignment_left_padding(4, 10, TextAlignment::Right, 0), 6);
+        assert_eq!(alignment_left_padding(12, 10, TextAlignment::Center, 0), 0);
+    }
+
+    #[test]
+    fn label_spans_style_only_the_label_region() {
+        let base = Style::default().fg(Color::White);
+        let label = Style::default().fg(Color::Rgb(255, 136, 0));
+        let spans = label_spans("  hello  ", Some((2, 5)), base, label);
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "  ");
+        assert_eq!(spans[0].style, base);
+        assert_eq!(spans[1].content, "hello");
+        assert_eq!(spans[1].style, base.patch(label));
+        assert_eq!(spans[2].content, "  ");
+        assert_eq!(spans[2].style, base);
+    }
+
+    #[test]
+    fn label_spans_without_style_returns_single_span() {
+        let base = Style::default().fg(Color::White);
+        let spans = label_spans("hello", Some((0, 5)), base, Style::default());
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "hello");
+        assert_eq!(spans[0].style, base);
+    }
+
+    #[test]
+    fn script_meta_label_style_parses_fg_and_bg() {
+        let meta = ScriptRowMeta {
+            fg: Some("#ff8800".to_string()),
+            bg: Some("blue".to_string()),
+            ..ScriptRowMeta::default()
+        };
+
+        let style = script_meta_label_style(&meta);
+        assert_eq!(style.fg, Some(Color::Rgb(255, 136, 0)));
+        assert_eq!(style.bg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn script_meta_label_style_ignores_invalid_values() {
+        let meta = ScriptRowMeta {
+            fg: Some("not-a-color".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_label_style(&meta), Style::default());
+    }
+
+    #[test]
+    fn script_meta_label_style_maps_modifiers() {
+        let meta = ScriptRowMeta {
+            bold: true,
+            dim: true,
+            italic: true,
+            underline: true,
+            strikethrough: true,
+            reversed: true,
+            ..ScriptRowMeta::default()
+        };
+
+        let style = script_meta_label_style(&meta);
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert!(style.add_modifier.contains(Modifier::DIM));
+        assert!(style.add_modifier.contains(Modifier::ITALIC));
+        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+        assert!(style.add_modifier.contains(Modifier::CROSSED_OUT));
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn script_meta_label_style_without_modifiers_stays_default() {
+        let meta = ScriptRowMeta {
+            bold: false,
+            italic: false,
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_label_style(&meta), Style::default());
+    }
+
+    #[test]
+    fn script_meta_fill_color_parses_hex_and_names() {
+        let hex = ScriptRowMeta {
+            fill: Some("#102030".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_fill_color(&hex), Some(Color::Rgb(16, 32, 48)));
+
+        let named = ScriptRowMeta {
+            fill: Some("red".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_fill_color(&named), Some(Color::Red));
+
+        let invalid = ScriptRowMeta {
+            fill: Some("not-a-color".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_fill_color(&invalid), None);
+    }
+
+    #[test]
+    fn script_meta_fill_does_not_style_the_label() {
+        let meta = ScriptRowMeta {
+            fill: Some("#102030".to_string()),
+            ..ScriptRowMeta::default()
+        };
+        assert_eq!(script_meta_label_style(&meta), Style::default());
     }
 }

@@ -59,6 +59,15 @@ pub struct ScriptRowMeta {
     pub center: bool,
     pub urgent: bool,
     pub fuzzy: bool,
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    pub fill: Option<String>,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub reversed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -109,12 +118,15 @@ pub struct ScriptListing {
     pub metadata: Option<ScriptMetadata>,
 }
 
-type ScriptOutput = (
-    Option<String>,
-    Option<String>,
-    Option<ScriptMetadata>,
-    Vec<ScriptItem>,
-);
+#[derive(Debug, Clone, Default)]
+pub struct ScriptOutput {
+    pub title: Option<String>,
+    pub title_meta: ScriptRowMeta,
+    pub message: Option<String>,
+    pub message_meta: ScriptRowMeta,
+    pub meta: Option<ScriptMetadata>,
+    pub items: Vec<ScriptItem>,
+}
 
 #[derive(Debug, Clone)]
 struct ScriptPlugin {
@@ -142,11 +154,13 @@ pub struct App {
     pub should_quit: bool,
     pub config: AppConfig,
     pub status_message: Option<String>,
+    pub status_message_meta: ScriptRowMeta,
     pub launch_args: Option<Vec<String>>,
     pub mode: AppMode,
     pub filtered_files: Vec<String>,
     pub history: History,
     pub script_title: Option<String>,
+    pub script_title_meta: ScriptRowMeta,
     pub script_meta: Option<ScriptMetadata>,
     pub script_items: Vec<ScriptItem>,
     pub qst_ascii: String,
@@ -220,11 +234,13 @@ impl App {
             should_quit: false,
             config,
             status_message,
+            status_message_meta: ScriptRowMeta::default(),
             launch_args: None,
             mode: AppMode::AppSelection,
             filtered_files: Vec::new(),
             history,
             script_title: None,
+            script_title_meta: ScriptRowMeta::default(),
             script_meta: None,
             script_items: Vec::new(),
             qst_ascii,
@@ -490,13 +506,18 @@ impl App {
             return (trimmed.to_string(), ScriptRowMeta::default());
         }
 
-        let Some(meta_index) = trimmed.find(" @meta:") else {
+        let (visible, suffix) = if let Some(rest) = trimmed.strip_prefix("@meta:") {
+            (String::new(), format!("@meta:{rest}"))
+        } else if let Some(meta_index) = trimmed.find(" @meta:") {
+            (
+                trimmed[..meta_index].trim_end().to_string(),
+                trimmed[meta_index + 1..].to_string(),
+            )
+        } else {
             return (trimmed.to_string(), ScriptRowMeta::default());
         };
 
-        let visible = trimmed[..meta_index].trim_end().to_string();
-        let suffix = &trimmed[meta_index + 1..];
-        let meta = Self::parse_script_row_meta_suffix(suffix);
+        let meta = Self::parse_script_row_meta_suffix(&suffix);
         (visible, meta)
     }
 
@@ -537,6 +558,21 @@ impl App {
                 "center" => meta.center = Self::parse_meta_bool(value),
                 "urgent" => meta.urgent = Self::parse_meta_bool(value),
                 "fuzzy" => meta.fuzzy = Self::parse_meta_bool(value),
+                "fg" => {
+                    meta.fg = (!value.is_empty()).then(|| value.to_string());
+                }
+                "bg" => {
+                    meta.bg = (!value.is_empty()).then(|| value.to_string());
+                }
+                "fill" => {
+                    meta.fill = (!value.is_empty()).then(|| value.to_string());
+                }
+                "bold" => meta.bold = Self::parse_meta_bool(value),
+                "dim" => meta.dim = Self::parse_meta_bool(value),
+                "italic" | "italics" => meta.italic = Self::parse_meta_bool(value),
+                "underline" | "underlined" => meta.underline = Self::parse_meta_bool(value),
+                "strikethrough" | "strike" => meta.strikethrough = Self::parse_meta_bool(value),
+                "reversed" | "reverse" => meta.reversed = Self::parse_meta_bool(value),
                 _ => {}
             }
         }
@@ -557,6 +593,21 @@ impl App {
         target.center |= source.center;
         target.urgent |= source.urgent;
         target.fuzzy |= source.fuzzy;
+        if source.fg.is_some() {
+            target.fg = source.fg;
+        }
+        if source.bg.is_some() {
+            target.bg = source.bg;
+        }
+        if source.fill.is_some() {
+            target.fill = source.fill;
+        }
+        target.bold |= source.bold;
+        target.dim |= source.dim;
+        target.italic |= source.italic;
+        target.underline |= source.underline;
+        target.strikethrough |= source.strikethrough;
+        target.reversed |= source.reversed;
     }
 
     fn parse_script_row_text(text: &str) -> (String, ScriptRowMeta) {
@@ -839,6 +890,7 @@ impl App {
         }
 
         self.script_title = None;
+        self.script_title_meta = ScriptRowMeta::default();
         self.script_meta = None;
         self.script_items.clear();
         self.script_results_ready = false;
@@ -1165,12 +1217,12 @@ impl App {
             Ok(_) => {
                 info!("Launched {}", entry_name);
                 self.should_quit = true;
-                self.status_message = None;
+                self.set_status_message(None);
                 Ok(())
             }
             Err(err) => {
                 error!("Failed to launch {}: {}", entry_name, err);
-                self.status_message = Some(format!("Failed to launch {}: {}", entry_name, err));
+                self.set_status_message(Some(format!("Failed to launch {}: {}", entry_name, err)));
                 Err(err.to_string())
             }
         }
@@ -1211,11 +1263,11 @@ impl App {
             Ok(_) => {
                 info!("Opened {}", path_str);
                 self.should_quit = true;
-                self.status_message = None;
+                self.set_status_message(None);
             }
             Err(err) => {
                 error!("Failed to open {}: {}", path_str, err);
-                self.status_message = Some(format!("Failed to open {}: {}", path_str, err));
+                self.set_status_message(Some(format!("Failed to open {}: {}", path_str, err)));
             }
         }
     }
@@ -1653,22 +1705,33 @@ impl App {
         };
 
         match msg.result {
-            Ok((title, message, meta, items)) => {
-                debug!("Script {} returned {} items", msg.script_id, items.len());
-                self.script_meta = meta.clone();
-                self.script_title = title
+            Ok(output) => {
+                debug!(
+                    "Script {} returned {} items",
+                    msg.script_id,
+                    output.items.len()
+                );
+                self.script_meta = output.meta.clone();
+                self.script_title = output
+                    .title
                     .or_else(|| {
-                        meta.and_then(|meta| meta.name)
+                        output
+                            .meta
+                            .and_then(|meta| meta.name)
                             .map(|name| format!(" {} ", name))
                     })
                     .or_else(|| Some(format!(" {} ", msg.script_id)));
-                self.script_items = items;
-                self.status_message = message;
+                self.script_title_meta = output.title_meta;
+                self.script_items = output.items;
+                self.status_message = output.message;
+                self.status_message_meta = output.message_meta;
             }
             Err(err) => {
                 error!("Script {} failed: {}", msg.script_id, err);
                 self.script_meta = None;
                 self.script_title = Some(format!(" {} ", msg.script_id));
+                self.script_title_meta = ScriptRowMeta::default();
+                self.set_status_message(None);
                 self.script_items = vec![ScriptItem {
                     title: format!("Script error: {}", err),
                     value: String::new(),
@@ -1686,6 +1749,11 @@ impl App {
         } else {
             self.list_state.select(self.first_selectable_script_index());
         }
+    }
+
+    fn set_status_message(&mut self, message: Option<String>) {
+        self.status_message = message;
+        self.status_message_meta = ScriptRowMeta::default();
     }
 
     fn find_script(&self, selector: &str) -> Option<&ScriptPlugin> {
@@ -1830,7 +1898,9 @@ impl App {
         fuzzy_matching_enabled: bool,
     ) -> ScriptOutput {
         let mut title: Option<String> = None;
+        let mut title_meta = ScriptRowMeta::default();
         let mut message: Option<String> = None;
+        let mut message_meta = ScriptRowMeta::default();
         let mut meta: Option<ScriptMetadata> = None;
         let mut items = Vec::new();
         let mut default_actions = vec![ScriptAction::None];
@@ -1877,6 +1947,7 @@ impl App {
                         script_fuzzy = true;
                     }
                     title = Some(format!(" {} ", visible));
+                    title_meta = meta;
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("message ") {
@@ -1885,10 +1956,12 @@ impl App {
                         script_fuzzy = true;
                     }
                     message = Some(visible);
+                    message_meta = meta;
                     continue;
                 }
                 if directive == "clear_message" {
                     message = None;
+                    message_meta = ScriptRowMeta::default();
                     continue;
                 }
                 if let Some(value) = directive.strip_prefix("action ") {
@@ -2037,7 +2110,14 @@ impl App {
         let mut items = items;
         items.sort_by_key(|item| std::cmp::Reverse(item.meta.urgent));
 
-        (title, message, meta, items)
+        ScriptOutput {
+            title,
+            title_meta,
+            message,
+            message_meta,
+            meta,
+            items,
+        }
     }
 
     fn append_storage_rows(
@@ -2154,39 +2234,42 @@ impl App {
                 ScriptAction::CopyToClipboard => match self.copy_to_clipboard(&item.value) {
                     Ok(()) => {
                         debug!("Copied value to clipboard");
-                        self.status_message = Some("Copied to clipboard".to_string());
+                        self.set_status_message(Some("Copied to clipboard".to_string()));
                         true
                     }
                     Err(err) => {
                         error!("Clipboard failed: {}", err);
-                        self.status_message = Some(format!("Clipboard failed: {}", err));
+                        self.set_status_message(Some(format!("Clipboard failed: {}", err)));
                         false
                     }
                 },
                 ScriptAction::SetStatusMessage => {
-                    self.status_message = Some(item.value.clone());
+                    self.set_status_message(Some(item.value.clone()));
                     true
                 }
                 ScriptAction::ClearStatusMessage => {
-                    self.status_message = None;
+                    self.set_status_message(None);
                     true
                 }
                 ScriptAction::Execute => match Self::spawn_shell_command(&item.value) {
                     Ok(child) => {
                         info!("Executing shell command: {}", item.value);
                         pending_execute = Some(child);
-                        self.status_message = None;
+                        self.set_status_message(None);
                         true
                     }
                     Err(err) => {
                         error!("Failed to execute command ({}): {}", item.value, err);
-                        self.status_message = Some(format!("Failed to execute command: {}", err));
+                        self.set_status_message(Some(format!(
+                            "Failed to execute command: {}",
+                            err
+                        )));
                         false
                     }
                 },
                 ScriptAction::ExitApp => {
                     self.should_quit = true;
-                    self.status_message = None;
+                    self.set_status_message(None);
                     true
                 }
                 ScriptAction::ResetPrompt => {
@@ -2355,11 +2438,13 @@ mod tests {
             should_quit: false,
             config: AppConfig::default(),
             status_message: None,
+            status_message_meta: ScriptRowMeta::default(),
             launch_args: None,
             mode: AppMode::AppSelection,
             filtered_files: Vec::new(),
             history: History::default(),
             script_title: None,
+            script_title_meta: ScriptRowMeta::default(),
             script_meta: None,
             script_items: Vec::new(),
             qst_ascii: String::new(),
@@ -2419,6 +2504,140 @@ mod tests {
     }
 
     #[test]
+    fn parse_script_row_text_reads_fg_and_bg_meta() {
+        let (visible, meta) =
+            App::parse_script_row_text("Swatch|row @meta:fg=#ff8800 @meta:bg=#102030");
+
+        assert_eq!(visible, "Swatch|row");
+        assert_eq!(meta.fg.as_deref(), Some("#ff8800"));
+        assert_eq!(meta.bg.as_deref(), Some("#102030"));
+    }
+
+    #[test]
+    fn parse_script_row_text_reads_fill_meta() {
+        let (visible, meta) = App::parse_script_row_text("@meta:fill=#102030 @meta:center=true");
+
+        assert_eq!(visible, "");
+        assert_eq!(meta.fill.as_deref(), Some("#102030"));
+        assert!(meta.center);
+    }
+
+    #[test]
+    fn apply_script_row_meta_overrides_fill_when_present() {
+        let mut target = ScriptRowMeta::default();
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                fill: Some("#111111".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                fill: Some("#222222".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert_eq!(target.fill.as_deref(), Some("#222222"));
+    }
+
+    #[test]
+    fn parse_script_row_text_supports_leading_meta_token() {
+        let (visible, meta) = App::parse_script_row_text(
+            "@meta:fg=#3498db @meta:center=true @meta:nonselectable=true",
+        );
+
+        assert_eq!(visible, "");
+        assert_eq!(meta.fg.as_deref(), Some("#3498db"));
+        assert!(meta.center);
+        assert!(meta.nonselectable);
+    }
+
+    #[test]
+    fn parse_script_row_text_reads_modifier_meta() {
+        let (visible, meta) = App::parse_script_row_text(
+            "Styled @meta:bold @meta:italics=true @meta:underline=true @meta:strike @meta:reverse=true @meta:dim=false",
+        );
+
+        assert_eq!(visible, "Styled");
+        assert!(meta.bold);
+        assert!(meta.italic);
+        assert!(meta.underline);
+        assert!(meta.strikethrough);
+        assert!(meta.reversed);
+        assert!(!meta.dim);
+    }
+
+    #[test]
+    fn apply_script_row_meta_merges_modifiers() {
+        let mut target = ScriptRowMeta::default();
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                bold: true,
+                ..ScriptRowMeta::default()
+            },
+        );
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                italic: true,
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert!(target.bold);
+        assert!(target.italic);
+        assert!(!target.underline);
+    }
+
+    #[test]
+    fn apply_script_row_meta_overrides_colors_when_present() {
+        let mut target = ScriptRowMeta::default();
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                fg: Some("#111111".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                bg: Some("#222222".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert_eq!(target.fg.as_deref(), Some("#111111"));
+        assert_eq!(target.bg.as_deref(), Some("#222222"));
+
+        App::apply_script_row_meta(
+            &mut target,
+            ScriptRowMeta {
+                fg: Some("#333333".to_string()),
+                ..ScriptRowMeta::default()
+            },
+        );
+
+        assert_eq!(target.fg.as_deref(), Some("#333333"));
+    }
+
+    #[test]
+    fn parse_script_output_captures_title_and_message_colors() {
+        let output = "qst! title Forecast @meta:fg=#00ff00\nqst! message Rain soon @meta:bg=#000080\nRow|value\n";
+
+        let parsed = App::parse_script_output(output, "", "sample", true);
+
+        assert_eq!(parsed.title.as_deref(), Some(" Forecast "));
+        assert_eq!(parsed.title_meta.fg.as_deref(), Some("#00ff00"));
+        assert_eq!(parsed.message.as_deref(), Some("Rain soon"));
+        assert_eq!(parsed.message_meta.bg.as_deref(), Some("#000080"));
+    }
+
+    #[test]
     fn fuzzy_filter_keeps_non_fuzzy_rows_and_matches_fuzzy_rows() {
         let fuzzy_item = ScriptItem {
             title: "Clipboard history".to_string(),
@@ -2451,8 +2670,8 @@ mod tests {
     #[test]
     fn parse_script_output_ignores_log_directive_and_continues_parsing() {
         let output = "qst! title Test\nqst! log some debug info\nHello|world\n";
-        let (_title, _message, _meta, items) =
-            App::parse_script_output(output, "", "test_logger", true);
+        let parsed = App::parse_script_output(output, "", "test_logger", true);
+        let items = parsed.items;
         assert_eq!(
             items.len(),
             1,
@@ -2484,13 +2703,13 @@ mod tests {
     fn parse_script_output_parses_script_metadata_header() {
         let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! title My Awesome script\n";
 
-        let (title, message, meta, items) = App::parse_script_output(output, "", "sample", true);
+        let parsed = App::parse_script_output(output, "", "sample", true);
 
-        assert_eq!(title.as_deref(), Some(" My Awesome script "));
-        assert!(message.is_none());
-        assert!(items.is_empty());
+        assert_eq!(parsed.title.as_deref(), Some(" My Awesome script "));
+        assert!(parsed.message.is_none());
+        assert!(parsed.items.is_empty());
 
-        let meta = meta.expect("metadata should be captured");
+        let meta = parsed.meta.expect("metadata should be captured");
         assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
         assert_eq!(meta.version.as_deref(), Some("1.0.0"));
         assert_eq!(meta.author.as_deref(), Some("John Doe"));
@@ -2504,13 +2723,13 @@ mod tests {
     fn parse_script_output_supports_script_metadata_field_selection() {
         let output = "qst! meta My Awesome script, 1.0.0, John Doe, This script does awesome things!\nqst! meta author\n";
 
-        let (title, message, meta, items) = App::parse_script_output(output, "", "sample", true);
+        let parsed = App::parse_script_output(output, "", "sample", true);
 
-        assert_eq!(title.as_deref(), Some(" My Awesome script "));
-        assert_eq!(message.as_deref(), Some("John Doe"));
-        assert!(items.is_empty());
+        assert_eq!(parsed.title.as_deref(), Some(" My Awesome script "));
+        assert_eq!(parsed.message.as_deref(), Some("John Doe"));
+        assert!(parsed.items.is_empty());
 
-        let meta = meta.expect("metadata should be captured");
+        let meta = parsed.meta.expect("metadata should be captured");
         assert_eq!(meta.name.as_deref(), Some("My Awesome script"));
         assert_eq!(meta.version.as_deref(), Some("1.0.0"));
         assert_eq!(meta.author.as_deref(), Some("John Doe"));
@@ -2745,12 +2964,11 @@ mod tests {
             generation: pending_generation,
             script_id: "echo".to_string(),
             payload: "other".to_string(),
-            result: Ok((
-                Some(" Other ".to_string()),
-                None,
-                None,
-                vec![script_item("other")],
-            )),
+            result: Ok(ScriptOutput {
+                title: Some(" Other ".to_string()),
+                items: vec![script_item("other")],
+                ..ScriptOutput::default()
+            }),
         });
         app.poll_script_results();
 
@@ -2879,17 +3097,16 @@ mod tests {
             generation: app.script_generation + 1,
             script_id: "echo".to_string(),
             payload: String::new(),
-            result: Ok((
-                Some(" Stale ".to_string()),
-                None,
-                None,
-                vec![ScriptItem {
+            result: Ok(ScriptOutput {
+                title: Some(" Stale ".to_string()),
+                items: vec![ScriptItem {
                     title: "stale".to_string(),
                     value: "stale".to_string(),
                     actions: vec![ScriptAction::None],
                     meta: ScriptRowMeta::default(),
                 }],
-            )),
+                ..ScriptOutput::default()
+            }),
         });
 
         app.poll_script_results();
