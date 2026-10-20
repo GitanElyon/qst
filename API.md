@@ -121,7 +121,7 @@ Supported row metadata keys:
 - `permanent=<bool>`
   - Keeps the row available for UI flows that preserve permanent rows.
 - `active=<bool>`
-  - Renders the row with the active-state styling.
+  - **DEPRECATED**--use `@meta:fill=<color>` instead. Renders the row with the active-state styling.
 - `center=<bool>`
   - Centers the row within the available text area.
 - `urgent=<bool>`
